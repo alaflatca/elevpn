@@ -6,22 +6,24 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 func Create(name string) (*Device, error) {
-	unit, err := parseUTUNName(name)
-	if err != nil {
-		return nil, err
-	}
+	// unit, err := parseUTUNName(name)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, unix.AF_SYS_CONTROL)
-	if err != nil {
-		return nil, fmt.Errorf("socket(AF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL): %v", err)
-	}
+	// fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, unix.AF_SYS_CONTROL)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("socket(AF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL): %v", err)
+	// }
 
 	return nil, nil
+}
+
+func (d *Device) Setup(name string) error {
+	return nil
 }
 
 func parseUTUNName(name string) (int, error) {

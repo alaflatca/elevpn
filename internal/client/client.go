@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"elevpn/internal/tun"
 	"fmt"
 	"net"
 	"time"
@@ -25,6 +26,13 @@ func New(cfg ClientConfig) (*Client, error) {
 }
 
 func (c *Client) Run(ctx context.Context) error {
+	device, err := tun.Create("tun0")
+	if err != nil {
+		return err
+	}
+	fmt.Printf("tun device name: %s\n", device.Name)
+	defer device.Close()
+
 	addr, err := c.echoClientUDP(ctx)
 	if err != nil {
 		return err

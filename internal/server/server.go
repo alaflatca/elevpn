@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"elevpn/internal/tun"
 	"fmt"
 	"log"
 	"net"
@@ -25,6 +26,13 @@ func New(cfg ServerConfig) (*Server, error) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	device, err := tun.Create("tun0")
+	if err != nil {
+		return err
+	}
+	fmt.Printf("tun device name: %s\n", device.Name)
+	defer device.Close()
+
 	addr, err := s.echoServerUDP(ctx)
 	if err != nil {
 		return err

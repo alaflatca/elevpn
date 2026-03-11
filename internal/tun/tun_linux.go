@@ -36,3 +36,18 @@ func Create(name string) (*Device, error) {
 		Name: actualName,
 	}, nil
 }
+
+func (d *Device) Setup(name string) error {
+	sock, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return fmt.Errorf("socket: %w", err)
+	}
+	defer unix.Close(sock)
+
+	_, err = unix.NewIfreq(name)
+	if err != nil {
+
+	}
+
+	return nil
+}
