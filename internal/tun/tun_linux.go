@@ -4,6 +4,7 @@ package tun
 
 import (
 	"fmt"
+	"net"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -37,16 +38,92 @@ func Create(name string) (*Device, error) {
 	}, nil
 }
 
-func (d *Device) Setup(name string) error {
+func (d *Device) SetMasquerade() error {
+	socket, err := unix.Socket(unix.AF_NETLINK, unix.NETLINK_NETFILTER, 0)
+	if err != nil {
+		fmt.Errorf("socket: %w", err)
+	}
+	return nil
+}
+
+func (d *Device) SetIPv4CIDR(cidr string) error {
+	if d == nil {
+		return fmt.Errorf("nil device")
+	}
+
+	ip, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return fmt.Errorf("parse cidr %q: %w", cidr, err)
+	}
+
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return fmt.Errorf("only IPv4 CIDR is supported: %q", cidr)
+	}
+
+	mask4 := net.IP(ipnet.Mask).To4()
+	if mask4 == nil {
+		return fmt.Errorf("invalid IPv4 mask in CIDR: %q", cidr)
+	}
+
+	sock, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return fmt.Errorf("socket(AF_INET, SOCK_DGRAM): %w", err)
+	}
+	defer unix.Close(sock)
+
+	// TUN 인터페이스에 IPv4 추가
+	ifr, err := unix.NewIfreq(d.Name)
+	if err != nil {
+		return fmt.Errorf("new ifreq(addr): %w", err)
+	}
+	if err := ifr.SetInet4Addr(ip4); err != nil {
+		return fmt.Errorf("SetInet4Addr(addr): %w", err)
+	}
+	if err := unix.IoctlIfreq(sock, unix.SIOCSIFADDR, ifr); err != nil {
+		return fmt.Errorf("ioctl(SIOCSIFADDR): %w", err)
+	}
+
+	// TUN 인터페이스에  Subnet Mask 추가
+	ifr, err = unix.NewIfreq(d.Name)
+	if err != nil {
+		return fmt.Errorf("new ifreq(mask): %w", err)
+	}
+	if err := ifr.SetInet4Addr(mask4); err != nil {
+		return fmt.Errorf("SetInet4Addr(mask): %w", err)
+	}
+	if err := unix.IoctlIfreq(sock, unix.SIOCSIFNETMASK, ifr); err != nil {
+		return fmt.Errorf("ioctl(SIOCSIFNETMASK): %w", err)
+	}
+
+	return nil
+}
+
+func (d *Device) SetUp() error {
+	if d == nil {
+		return fmt.Errorf("nil device")
+	}
+
 	sock, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
 	if err != nil {
 		return fmt.Errorf("socket: %w", err)
 	}
 	defer unix.Close(sock)
 
-	_, err = unix.NewIfreq(name)
+	ifr, err := unix.NewIfreq(d.Name)
 	if err != nil {
+		return fmt.Errorf("new ifreq: %w", err)
+	}
 
+	if err := unix.IoctlIfreq(sock, unix.SIOCGIFFLAGS, ifr); err != nil {
+		return fmt.Errorf("SICOCGIFFLAGS: %w", err)
+	}
+
+	flags := ifr.Uint16()
+	ifr.SetUint16(flags | unix.IFF_UP) // 기존 플래그에서  IFF_UP 플래그 추가
+
+	if err := unix.IoctlIfreq(sock, unix.SIOCSIFFLAGS, ifr); err != nil {
+		return fmt.Errorf("SICOCSIFFLAGS: %w", err)
 	}
 
 	return nil

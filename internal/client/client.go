@@ -26,14 +26,21 @@ func New(cfg ClientConfig) (*Client, error) {
 }
 
 func (c *Client) Run(ctx context.Context) error {
-	device, err := tun.Create("tun0")
+	device, err := tun.Create(c.cfg.TunName)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("tun device name: %s\n", device.Name)
 	defer device.Close()
 
-	addr, err := c.echoClientUDP(ctx)
+	if err := device.SetUp(); err != nil {
+		return err
+	}
+
+	if err := device.SetIPv4CIDR(c.cfg.CIDR); err != nil {
+		return err
+	}
+
+	addr, err := c.ListenUDP(ctx)
 	if err != nil {
 		return err
 	}
@@ -45,7 +52,7 @@ func (c *Client) Run(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) echoClientUDP(ctx context.Context) (net.Addr, error) {
+func (c *Client) ListenUDP(ctx context.Context) (net.Addr, error) {
 	conn, err := net.ListenPacket("udp", c.cfg.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("binding to udp %s: %v", c.cfg.Addr, err)

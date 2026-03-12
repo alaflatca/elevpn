@@ -8,10 +8,11 @@ import (
 )
 
 var (
-	clientAddr   string
-	clientServer string
-	clientTun    string
-	clientCIDR   string
+	clientListen    string
+	clientServer    string
+	clientTun       string
+	clientTunListen string
+	clientCIDR      string
 )
 
 var clientCmd = &cobra.Command{
@@ -21,10 +22,10 @@ var clientCmd = &cobra.Command{
 		if verbose {
 			fmt.Println("[client] verbose enabled")
 		}
-		fmt.Printf("[client] addr=%s server=%s tun=%s cidr=%s\n", clientAddr, clientServer, clientTun, clientCIDR)
+		fmt.Printf("[client] addr=%s server=%s tun=%s cidr=%s\n", clientListen, clientServer, clientTun, clientCIDR)
 
 		cli, err := client.New(client.ClientConfig{
-			Addr:       clientAddr,
+			Addr:       clientListen,
 			ServerAddr: clientServer,
 			TunName:    clientTun,
 			CIDR:       clientCIDR,
@@ -41,8 +42,9 @@ var clientCmd = &cobra.Command{
 }
 
 func init() {
-	clientCmd.Flags().StringVar(&clientAddr, "addr", "127.0.0.1:8888", "elevpn local UDP address")
-	clientCmd.Flags().StringVar(&clientServer, "server", "127.0.0.1:7777", "elevpn server UDP address")
-	clientCmd.Flags().StringVar(&clientTun, "tun", "tun0", "TUN device name")
-	clientCmd.Flags().StringVar(&clientCIDR, "cidr", "10.8.0.2/24", "TUN interface CIDR (client)")
+	clientCmd.Flags().StringVar(&clientListen, "listen", "0.0.0.0:9020", "elevpn local UDP address")
+	clientCmd.Flags().StringVar(&clientServer, "server", "0.0.0.0:9010", "elevpn server UDP address")
+	clientCmd.Flags().StringVar(&clientTun, "tun", "tun1", "TUN device name")
+	clientCmd.Flags().StringVar(&clientCIDR, "cidr", "10.77.0.2/32", "TUN interface CIDR (client)")
+	// _ = clientCmd.MarkFlagRequired("server")  로컬 테스트를 위해서 잠시 주석처리
 }

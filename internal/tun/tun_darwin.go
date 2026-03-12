@@ -22,7 +22,14 @@ func Create(name string) (*Device, error) {
 	return nil, nil
 }
 
-func (d *Device) Setup(name string) error {
+func (d *Device) SetMasquerade() error {
+	return nil
+}
+
+func (d *Device) SetUp() error {
+	return nil
+}
+func (d *Device) SetIPv4CIDR(cidr string) error {
 	return nil
 }
 

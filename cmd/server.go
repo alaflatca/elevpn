@@ -8,9 +8,10 @@ import (
 )
 
 var (
-	serverListen string
-	serverTun    string
-	serverCIDR   string
+	serverListen    string
+	serverTun       string
+	serverTunListen string
+	serverCIDR      string
 )
 
 var serverCmd = &cobra.Command{
@@ -40,8 +41,7 @@ var serverCmd = &cobra.Command{
 }
 
 func init() {
-	serverCmd.Flags().StringVar(&serverListen, "listen", "127.0.0.1:7777", "UDP listen address")
+	serverCmd.Flags().StringVar(&serverListen, "listen", "0.0.0.0:9010", "UDP listen address")
 	serverCmd.Flags().StringVar(&serverTun, "tun", "tun0", "TUN device name")
-	serverCmd.Flags().StringVar(&serverCIDR, "cidr", "10.8.0.1/24", "TUN interface CIDR (server)")
-	_ = clientCmd.MarkFlagRequired("server")
+	serverCmd.Flags().StringVar(&serverCIDR, "cidr", "10.77.0.1/24", "TUN interface CIDR (server)")
 }

@@ -26,14 +26,25 @@ func New(cfg ServerConfig) (*Server, error) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	device, err := tun.Create("tun0")
+	device, err := tun.Create(s.cfg.TunName)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("tun device name: %s\n", device.Name)
 	defer device.Close()
 
-	addr, err := s.echoServerUDP(ctx)
+	if err := device.SetUp(); err != nil {
+		return err
+	}
+
+	if err := device.SetIPv4CIDR(s.cfg.CIDR); err != nil {
+		return err
+	}
+
+	if err := device.SetMasquerade(); err != nil {
+		return err
+	}
+
+	addr, err := s.ListenUDP(ctx)
 	if err != nil {
 		return err
 	}
@@ -45,7 +56,8 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) echoServerUDP(ctx context.Context) (net.Addr, error) {
+func (s *Server) ListenUDP(ctx context.Context) (net.Addr, error) {
+	// net.ListenUDP("udp", s.cfg.Addr)
 	conn, err := net.ListenPacket("udp", s.cfg.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("binding to udp %s: %v", s.cfg.Addr, err)
