@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"elevpn/internal/tun"
+	"elevpn/vpn"
 	"fmt"
 	"log"
 	"net"
@@ -40,7 +41,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	if err := device.SetMasquerade(); err != nil {
+	if err := vpn.SetMasquerade(vpn.MasqueradeSpec{}); err != nil {
 		return err
 	}
 

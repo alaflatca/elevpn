@@ -38,14 +38,6 @@ func Create(name string) (*Device, error) {
 	}, nil
 }
 
-func (d *Device) SetMasquerade() error {
-	socket, err := unix.Socket(unix.AF_NETLINK, unix.NETLINK_NETFILTER, 0)
-	if err != nil {
-		fmt.Errorf("socket: %w", err)
-	}
-	return nil
-}
-
 func (d *Device) SetIPv4CIDR(cidr string) error {
 	if d == nil {
 		return fmt.Errorf("nil device")
