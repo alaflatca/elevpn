@@ -1,0 +1,12 @@
+1.	table 생성
+nft add table ip vpnnat
+
+2.	postrouting nat chain 생성
+nft add chain ip vpnnat postrouting '{ type nat hook postrouting priority 100; }'
+
+3.	masquerade rule 추가
+nft add rule ip vpnnat postrouting ip saddr 10.77.0.0/24 oifname "eth0" masquerade
+
+
+이 세 개는 네 서버가 VPN 내부 대역에서 나온 패킷을 외부 NIC로 나갈 때 source NAT 하도록 만드는 작업이다. 
+nftables netlink spec도 newtable, newchain, newrule 같은 연산을 별도로 정의하고 있고, chain에는 hook/type, rule에는 expressions 가 들어간다. 
