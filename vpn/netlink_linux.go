@@ -158,8 +158,11 @@ func buildNewTableMsg(seq uint32, tableName string) []byte {
 	var attrs []byte
 	attrs = putAttr(attrs, nftaTableName, zstr(tableName))
 	flags := uint16(unix.NLM_F_REQUEST | unix.NLM_F_ACK | unix.NLM_F_CREATE | unix.NLM_F_EXCL)
+	return nftMsg(seq, nftMsgNewTable, flags, nfprotoIPv4, attrs)
 }
 
+// attribute format
+// [ [ length(2) ][ type(2) ][ payload ][ padding ] ] (필요하다면 padding 사용)
 func putAttr(buf []byte, typ uint16, payload []byte) []byte {
 	length := 4 + len(payload)
 
@@ -170,6 +173,15 @@ func putAttr(buf []byte, typ uint16, payload []byte) []byte {
 	buf = append(buf, header...)
 	buf = append(buf, payload...)
 
+	if pad := align4(length); pad > 0 {
+		buf = append(buf, make([]byte, pad)...)
+	}
+
+	return buf
+}
+
+func align4(n int) int {
+	return (n + 3) &^ 3
 }
 
 func zstr(s string) []byte {
