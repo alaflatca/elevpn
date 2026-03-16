@@ -39,13 +39,18 @@ func SetMasquerade(spec MasqueradeSpec) error {
 	if err != nil {
 		return fmt.Errorf("parse cidr: %w", err)
 	}
+
 	ip4 := ipnet.IP.To4()
 	if ip4 == nil {
 		return fmt.Errorf("only IPv4 CIDR is supported")
 	}
 
-	// NETLINK_NETFILTER 소켓 생성/바인드
+	mask4 := net.IP(ipnet.Mask).To4()
+	if mask4 == nil {
+		return fmt.Errorf("only IPv4 mask is supported")
+	}
 
+	// NETLINK_NETFILTER 소켓 생성/바인드
 	fd, err := openNetlink(unix.NETLINK_NETFILTER)
 	if err != nil {
 		return fmt.Errorf("open NETLINK_NETFILTER: %w", err)
@@ -54,6 +59,13 @@ func SetMasquerade(spec MasqueradeSpec) error {
 
 	packet := batchMsg(1, nfnlMsgBatchBegin)
 	packet = append(packet, buildNewTableMsg(2, spec.TableName)...)
+	packet = append(packet, buildNewChainMsg(3, spec.TableName, spec.ChainName)...)
+	packet = append(packet, buildNewMasqRuleMsg(4, spec.TableName, spec.ChainName, ip4, mask4, spec.OIFName)...)
+	packet = append(packet, batchMsg(5, nfnlMsgBatchEnd)...)
 
-	return nil
+	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return fmt.Errorf("send nft batch: %w", err)
+	}
+
+	return rev
 }

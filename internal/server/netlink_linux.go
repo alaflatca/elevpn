@@ -347,6 +347,7 @@ func exprMetaOIFName() []byte {
 	var d []byte
 	d = putAttr(d, nftaMetaDreg, be32(nftReg2))
 	d = putAttr(d, nftaMetaKey, be32(nftMetaOifname))
+
 	return wrapExpr("meta", d)
 }
 
