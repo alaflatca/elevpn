@@ -1,0 +1,39 @@
+1. 송신 데이터 구조 (Request)
+
+Netlink Header (16 bytes)
+    [Length   (4 bytes)] *이 전체 메시지(헤더 + 페이로드)의 총 길이
+    [type     (2 bytes)] *메시지의 종류(예: 규칙 생성, 테이블 생성 등)
+    [Flags    (2 bytes)] *요청(REQUEST), 응답(ACK) 옵션
+    [Sequence (4 bytes)] *내가 붙인 일련번호, 나중에 답장을 매칭할 떄 쓰임
+    [PortID   (4 bytes)] * 보내는 쪽의 ID, 보통 0으로 채움
+
+Netfilter Header (4 bytes)
+    [Family    (1 bytes)] *IPv4(AF_INET)인지 IPv6인지 등을 커널에 알려줌
+    [Version   (1 bytes)] *넷링크 버전이며 보통 0
+    [Res ID    (2 bytes)] *나중을 위해 비워둔 예약 공간(0,0)
+
+Attributes  (실제 데이터 - TLV 방식)
+    [Attr Length (2 bytes)] *이 속성의 길이
+    [Attr Type   (2 bytes)] *테이블 이름인지, 체인 이름인지 등의 종류
+    [Value       (가변)]     *실제 값(예:"vpnnat"이라는 이름)이 들어감
+
+* 송신 시 페이로드 = [Netfilter Header] + [Attributes]
+
+
+2. 수신 데이터 구조 (Response)
+
+Netlink Header 
+    [Length    (4 bytes)] *응답 메시지 전체 길이
+    [type      (2 bytes)] *항상 2(NLMSG_ERROR)
+    [Flags     (2 bytes)] *응답 관련 플래그
+    [Sequence  (4 bytes)] *내가 보냈던 요청의 일련번호가 그대로 돌아옴
+    [PortID    (4 bytes)] *내 프로세스 ID
+
+Error Payload
+    [Errno     (4 bytes)] *0이면 성공, 음수면 실패
+    [Original Header (16 bytes)] *요청했을때 헤더를 돌려줌 (발신자 확인 가능 및 이 요청에 대한 답장이라는걸 확인 시켜주는 용도)
+
+* 수신 시 페이로드 = [Errno] + [Original Header]
+
+
+※ 페이로드란 Netlink Header(앞부분 16바이트)를 제외한 나머지모ㅁ든 데이터 부위를 말한다.

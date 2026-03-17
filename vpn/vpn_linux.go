@@ -40,7 +40,7 @@ func SetMasquerade(spec MasqueradeSpec) error {
 		return fmt.Errorf("parse cidr: %w", err)
 	}
 
-	ip4 := ipnet.IP.To4()
+	ip4 := ipnet.IP.To4() // mask 가 적용된 IP 대역
 	if ip4 == nil {
 		return fmt.Errorf("only IPv4 CIDR is supported")
 	}
@@ -67,5 +67,5 @@ func SetMasquerade(spec MasqueradeSpec) error {
 		return fmt.Errorf("send nft batch: %w", err)
 	}
 
-	return rev
+	return recvAcks(fd, 1, 2, 3, 4, 5)
 }

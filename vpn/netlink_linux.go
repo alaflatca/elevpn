@@ -103,6 +103,63 @@ func openNetlink(proto int) (int, error) {
 	return fd, nil
 }
 
+// 데이터 송신 (TLV)
+// Netlink Header
+// Netfilter Header
+// Attributes
+
+// 데이터 수신
+// NLMSG_ERROR 데이터 구조
+// Netlink Header  (16 byte)
+// Error Code	   (4  byte)
+// Original Header (16 byte) 내가 보냈던 요청 헤더 그대로 돌려줌 (발신자 확인용)
+func recvAcks(fd int, want ...uint32) error {
+	expected := make(map[uint32]bool, len(want))
+	for _, seq := range want {
+		expected[seq] = false
+	}
+
+	buf := make([]byte, 64*1024)
+	got := 0
+
+	for got < len(expected) {
+		n, _, err := unix.Recvfrom(fd, buf, 0)
+		if err != nil {
+			return fmt.Errorf("recv netlink: %w", err)
+		}
+
+		for off := 0; off+unix.NLMSG_HDRLEN <= n; {
+			msgLen := int(binary.NativeEndian.Uint32(buf[off : off+4]))
+			if msgLen < unix.NLMSG_HDRLEN || off+align4(msgLen) > n {
+				return fmt.Errorf("invalid netlink reply")
+			}
+
+			msgType := binary.NativeEndian.Uint16(buf[off+4 : off+6])
+			msgSeq := binary.NativeEndian.Uint32(buf[off+8 : off+12])
+
+			// 성공/실패 ==> NLMSG_ERROR 타입, 그 안에 errno를 확인해야됨
+			if msgType == unix.NLMSG_ERROR {
+				if msgLen < unix.NLMSG_HDRLEN+4 {
+					// NLMSG_ERROR 메시지라면 최소한 errno 4바이트는 있어야 하므로,
+					// 그보다 짧으면 깨진 응답으로 봅니다.
+					return fmt.Errorf("short NLMSG_ERROR")
+				}
+				errno := int32(binary.NativeEndian.Uint32(buf[off+16 : off+20]))
+				if errno != 0 {
+					return fmt.Errorf("netlink errno=%d (%v) seq=%d", -errno, unix.Errno(-errno), msgSeq)
+				}
+				if done, ok := expected[msgSeq]; ok && !done {
+					expected[msgSeq] = true
+					got++
+				}
+			}
+
+			off += align4(msgLen)
+		}
+	}
+	return nil
+}
+
 // Netfilter 통신의 위한 데이터 계층
 //  1. NetLink Header 		# 커널이 "이 데이터 덩어리는 어디까지인가?"를 파악하는 용도 (16바이트)
 //  2. Netfilter Header		# 커널의 Netfilter 모듈이 "IPv4인가, IPv6인가?"를 파악하는 용도 (4바이트)
@@ -191,7 +248,11 @@ func buildNewMasqRuleMsg(seq uint32, tableName, chainName string, ip4, mask4 net
 	exprs = append(exprs, exprPayloadIPv4Saddr()...) // 지나가는 패킷의 출발지 IP 주소를 읽어라
 	exprs = append(exprs, exprBitwiseMask(mask4)...) // 위 주소에 서브넷 마스크를 씌워서 네트워크 대역만 남겨라
 	exprs = append(exprs, exprCmpIPv4(ip4)...)       // 위 대역이 우리가 허용한 VPN대역이 맞는지 확인해라
+	// 여기까지 작업 : ip saddr 10.77.0.0/24
+
+	exprs = append(exprs, exprMetaOIFName()...)
 	exprs = append(exprs, exprCmpIfName(oifName)...)
+	// 네트워크 인터페이스 확인 작업 "eth0"
 	exprs = append(exprs, exprMasq()...)
 
 	var attrs []byte
@@ -285,50 +346,6 @@ func wrapExpr(name string, data []byte) []byte {
 	exprAttrs = putAttr(exprAttrs, nftaExprName, zstr(name))
 	exprAttrs = putAttr(exprAttrs, nftaExprData, data)
 	return putNestAttr(nil, nftaListElem, exprAttrs)
-}
-
-func recvAcks(fd int, want ...uint32) error {
-	expected := make(map[uint32]bool, len(want))
-	for _, seq := range want {
-		expected[seq] = false
-	}
-
-	buf := make([]byte, 64*1024)
-	got := 0
-
-	for got < len(expected) {
-		n, _, err := unix.Recvfrom(fd, buf, 0)
-		if err != nil {
-			return fmt.Errorf("recv netlink: %w", err)
-		}
-
-		for off := 0; off+unix.NLMSG_HDRLEN <= n; {
-			msgLen := int(binary.NativeEndian.Uint32(buf[off : off+4]))
-			if msgLen < unix.NLMSG_HDRLEN || off+align4(msgLen) > n {
-				return fmt.Errorf("invalid netlink reply")
-			}
-
-			msgType := binary.NativeEndian.Uint16(buf[off+4 : off+6])
-			msgSeq := binary.NativeEndian.Uint32(buf[off+8 : off+12])
-
-			if msgType == unix.NLMSG_ERROR {
-				if msgLen < unix.NLMSG_HDRLEN+4 {
-					return fmt.Errorf("shot NLMSG_ERROR")
-				}
-				errno := int32(binary.NativeEndian.Uint32(buf[off+16 : off+20]))
-				if errno != 0 {
-					return fmt.Errorf("netlink errno=%d seq=%d", -errno, msgSeq)
-				}
-				if done, ok := expected[msgSeq]; ok && !done {
-					expected[msgSeq] = true
-					got++
-				}
-			}
-
-			off += align4(msgLen)
-		}
-	}
-	return nil
 }
 
 func dataValue(v []byte) []byte {
