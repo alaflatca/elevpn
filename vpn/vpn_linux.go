@@ -67,5 +67,5 @@ func SetMasquerade(spec MasqueradeSpec) error {
 		return fmt.Errorf("send nft batch: %w", err)
 	}
 
-	return recvAcks(fd, 1, 2, 3, 4, 5)
+	return recvAcks(fd, 2, 3, 4)
 }

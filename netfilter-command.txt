@@ -1,0 +1,26 @@
+[Server]
+1.	table 생성
+nft add table ip vpnnat
+
+2.	postrouting nat chain 생성
+nft add chain ip vpnnat postrouting '{ type nat hook postrouting priority 100; }'
+
+3.	masquerade rule 추가
+nft add rule ip vpnnat postrouting ip saddr 10.77.0.0/24 oifname "eth0" masquerade
+
+이 세 개는 네 서버가 VPN 내부 대역에서 나온 패킷을 외부 NIC로 나갈 때 source NAT 하도록 만드는 작업이다. 
+nftables netlink spec도 newtable, newchain, newrule 같은 연산을 별도로 정의하고 있고, chain에는 hook/type, rule에는 expressions 가 들어간다. 
+
+
+=====
+
+
+[Client]
+1.	VPN 서버 공인 IP로 가는 예외 route
+server_ip/32 via real_gateway dev real_nic
+
+2.	default를 tun으로 돌리는 route
+default dev tun0
+
+이 두 개를 넣는 이유는, 일반 트래픽은 tun0로 모으고 싶지만 VPN 서버로 보내는 UDP 자체는 원래 물리 NIC로 계속 나가야 하기 때문이다.
+Linux routing은 더 구체적인 prefix를 우선 선택하므로 /32 host route가 default보다 먼저 잡힌다. default 는 fallback 경로다

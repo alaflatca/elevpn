@@ -21,7 +21,7 @@ var serverCmd = &cobra.Command{
 		if verbose {
 			fmt.Println("[server] verbose enabled")
 		}
-		fmt.Printf("[server] listen=%s tun=%s cidr=%s\n", serverListen, serverTun, serverCIDR)
+		fmt.Printf("[server] init listen=%s tun=%s cidr=%s\n", serverListen, serverTun, serverCIDR)
 
 		svr, err := server.New(server.ServerConfig{
 			Addr:    serverListen,

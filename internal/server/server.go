@@ -41,7 +41,12 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	if err := vpn.SetMasquerade(vpn.MasqueradeSpec{}); err != nil {
+	if err := vpn.SetMasquerade(vpn.MasqueradeSpec{
+		TableName: "vpnnat",
+		ChainName: "postrouting",
+		SrcCIDR:   s.cfg.CIDR,
+		OIFName:   s.cfg.TunName,
+	}); err != nil {
 		return err
 	}
 
@@ -49,7 +54,6 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
 	fmt.Printf("[server] network: %s, addr: %s\n", addr.Network(), addr.String())
 
 	<-ctx.Done()
@@ -58,13 +62,13 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) ListenUDP(ctx context.Context) (net.Addr, error) {
-	// net.ListenUDP("udp", s.cfg.Addr)
 	conn, err := net.ListenPacket("udp", s.cfg.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("binding to udp %s: %v", s.cfg.Addr, err)
 	}
 	go func() {
 		go func() {
+			log.Println("ctx close")
 			<-ctx.Done()
 			_ = conn.Close()
 		}()

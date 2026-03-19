@@ -122,9 +122,19 @@ func recvAcks(fd int, want ...uint32) error {
 	buf := make([]byte, 64*1024)
 	got := 0
 
+	tv := unix.Timeval{
+		Sec: 5,
+	}
+	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv); err != nil {
+		return fmt.Errorf("setsockopt: %v", err)
+	}
+
 	for got < len(expected) {
 		n, _, err := unix.Recvfrom(fd, buf, 0)
 		if err != nil {
+			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+				return fmt.Errorf("netlink response timeout(커널 응답 X)")
+			}
 			return fmt.Errorf("recv netlink: %w", err)
 		}
 
@@ -146,7 +156,7 @@ func recvAcks(fd int, want ...uint32) error {
 				}
 				errno := int32(binary.NativeEndian.Uint32(buf[off+16 : off+20]))
 				if errno != 0 {
-					return fmt.Errorf("netlink errno=%d (%v) seq=%d", -errno, unix.Errno(-errno), msgSeq)
+					return fmt.Errorf("netlink errno=%d (%v) seq=%d msgType=%d msgLen=%d", -errno, unix.Errno(-errno), msgSeq, msgType, msgLen)
 				}
 				if done, ok := expected[msgSeq]; ok && !done {
 					expected[msgSeq] = true
@@ -172,8 +182,8 @@ func recvAcks(fd int, want ...uint32) error {
 // 4. [New Rule]	Netlink Hdr + NetFilter Hdr + Rule  Attributes (Payload)
 // 5. [Batch End] 	Netlink Hdr + NetFilter Hdr
 func batchMsg(seq uint32, msgType uint16) []byte {
-	body := nfgen(unix.AF_UNSPEC)
-	return nlMsg(seq, msgType, unix.NLM_F_REQUEST|unix.NLM_F_ACK, body)
+	body := nfgen(unix.AF_UNSPEC, nfnlSubsysNftables)
+	return nlMsg(seq, msgType, unix.NLM_F_REQUEST, body)
 }
 
 // NetFilter Header
@@ -186,8 +196,12 @@ func batchMsg(seq uint32, msgType uint16) []byte {
 //
 // nfnlVersion : Netfilter 넷링크 버전 (보통 0)
 // res_id : 리소스ID,  나중을 위해 예약된 공간 (보통 0,0)
-func nfgen(family byte) []byte {
-	return []byte{family, nfnlVersion, 0, 0}
+func nfgen(family byte, resID uint16) []byte {
+	b := make([]byte, 4)
+	b[0] = family
+	b[1] = nfnlVersion
+	binary.BigEndian.PutUint16(b[2:4], resID)
+	return b
 }
 
 // Netlink Header
@@ -205,11 +219,11 @@ func nfgen(family byte) []byte {
 // body: 위에서 만든 nfgen 데이터가 이 몸체(Body)로 들어갑니다.
 func nlMsg(seq uint32, msgType uint16, flags uint16, payload []byte) []byte {
 	h := make([]byte, unix.NLMSG_HDRLEN)
-	binary.NativeEndian.AppendUint32(h[0:4], uint32(unix.NLMSG_HDRLEN+len(payload)))
-	binary.NativeEndian.AppendUint16(h[4:6], msgType)
-	binary.NativeEndian.AppendUint16(h[6:8], flags)
-	binary.NativeEndian.AppendUint32(h[8:12], seq)
-	binary.NativeEndian.AppendUint32(h[12:16], 0)
+	binary.NativeEndian.PutUint32(h[0:4], uint32(unix.NLMSG_HDRLEN+len(payload)))
+	binary.NativeEndian.PutUint16(h[4:6], msgType)
+	binary.NativeEndian.PutUint16(h[6:8], flags)
+	binary.NativeEndian.PutUint32(h[8:12], seq)
+	binary.NativeEndian.PutUint32(h[12:16], 0)
 	return append(h, payload...)
 }
 
@@ -217,7 +231,7 @@ func nftMsg(seq uint32, msgType uint16, flags uint16, family byte, attrs []byte)
 	// msgType이 만약 8이라고 가정한다면
 	// before: 0000 1010 0000 0000 --->  after: 0000 1010 0000 1000
 	typ := uint16((nfnlSubsysNftables << 8) | int(msgType))
-	body := append(nfgen(family), attrs...)
+	body := append(nfgen(family, 0), attrs...)
 	return nlMsg(seq, typ, flags, body)
 }
 
@@ -274,8 +288,8 @@ func putAttr(buf []byte, typ uint16, payload []byte) []byte {
 	length := 4 + len(payload)
 
 	header := make([]byte, 4)
-	binary.NativeEndian.AppendUint16(header[0:2], uint16(length))
-	binary.NativeEndian.AppendUint16(header[2:4], typ)
+	binary.NativeEndian.PutUint16(header[0:2], uint16(length))
+	binary.NativeEndian.PutUint16(header[2:4], typ)
 
 	buf = append(buf, header...)
 	buf = append(buf, payload...)
