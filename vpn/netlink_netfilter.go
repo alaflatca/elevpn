@@ -91,18 +91,6 @@ const (
 	nlaFNested = 1 << 15
 )
 
-func openNetlink(proto int) (int, error) {
-	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, proto)
-	if err != nil {
-		return -1, fmt.Errorf("socket: %w", err)
-	}
-	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		unix.Close(fd)
-		return -1, fmt.Errorf("bind: %w", err)
-	}
-	return fd, nil
-}
-
 // 데이터 송신 (TLV)
 // Netlink Header
 // Netfilter Header
@@ -294,7 +282,8 @@ func putAttr(buf []byte, typ uint16, payload []byte) []byte {
 	buf = append(buf, header...)
 	buf = append(buf, payload...)
 
-	if pad := align4(length); pad > 0 {
+	pad := align4(length) - length
+	if pad > 0 {
 		buf = append(buf, make([]byte, pad)...)
 	}
 
@@ -358,7 +347,7 @@ func exprMasq() []byte {
 func wrapExpr(name string, data []byte) []byte {
 	var exprAttrs []byte
 	exprAttrs = putAttr(exprAttrs, nftaExprName, zstr(name))
-	exprAttrs = putAttr(exprAttrs, nftaExprData, data)
+	exprAttrs = putNestAttr(exprAttrs, nftaExprData, data)
 	return putNestAttr(nil, nftaListElem, exprAttrs)
 }
 

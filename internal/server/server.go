@@ -50,6 +50,10 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
+	if err := vpn.EnableIPForward(); err != nil {
+		return err
+	}
+
 	addr, err := s.ListenUDP(ctx)
 	if err != nil {
 		return err
@@ -68,7 +72,6 @@ func (s *Server) ListenUDP(ctx context.Context) (net.Addr, error) {
 	}
 	go func() {
 		go func() {
-			log.Println("ctx close")
 			<-ctx.Done()
 			_ = conn.Close()
 		}()

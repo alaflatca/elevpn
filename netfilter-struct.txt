@@ -1,3 +1,7 @@
+AF_Netlink
+    - NETLINK_NETFILTER : netfilter 서브시스템용 
+    - NETLINK_ROUTE     : 라우팅, 링크, 주소 제어용
+
 1. 송신 데이터 구조 (Request)
 
 Netlink Header (16 bytes)
@@ -5,12 +9,24 @@ Netlink Header (16 bytes)
     [type     (2 bytes)] *메시지의 종류(예: 규칙 생성, 테이블 생성 등)
     [Flags    (2 bytes)] *요청(REQUEST), 응답(ACK) 옵션
     [Sequence (4 bytes)] *내가 붙인 일련번호, 나중에 답장을 매칭할 떄 쓰임
-    [PortID   (4 bytes)] * 보내는 쪽의 ID, 보통 0으로 채움
+    [PortID   (4 bytes)] *보내는 쪽의 ID, 보통 0으로 채움
 
-Netfilter Header (4 bytes)
+
+=========================================================================================
+Netfilter Header (4 bytes)  
     [Family    (1 bytes)] *IPv4(AF_INET)인지 IPv6인지 등을 커널에 알려줌
     [Version   (1 bytes)] *넷링크 버전이며 보통 0
     [Res ID    (2 bytes)] *나중을 위해 비워둔 예약 공간(0,0)
+
+*[nfgenmsg: family, version, res_id]
+
+OR
+
+ROUTE Header ()
+
+*[rtmsg: family, dst_len, src_len, tos, table, ...]
+
+=========================================================================================
 
 Attributes  (실제 데이터 - TLV 방식)
     [Attr Length (2 bytes)] *이 속성의 길이
