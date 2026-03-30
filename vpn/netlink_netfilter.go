@@ -6,6 +6,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type MasqueradeSpec struct {
+	TableName string // vpnnat
+	ChainName string // postrouting
+	SrcCIDR   string // "10.77.0.1/24"
+	OIFName   string // "tun0"
+}
+
 func nftMsg(seq uint32, msgType uint16, flags uint16, family byte, attrs []byte) []byte {
 	// msgType이 만약 8이라고 가정한다면
 	// before: 0000 1010 0000 0000 --->  after: 0000 1010 0000 1000

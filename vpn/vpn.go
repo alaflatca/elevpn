@@ -9,32 +9,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type MasqueradeSpec struct {
-	TableName string // vpnnat
-	ChainName string // postrouting
-	SrcCIDR   string // "10.77.0.1/24"
-	OIFName   string // "tun0"
-}
-
-type RoutingSpec struct {
-	ServerIP    string
-	Gateway     string
-	RealOIFName string
-	TunOIFName  string
-}
-
-func openNetlink(proto int) (int, error) {
-	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, proto)
-	if err != nil {
-		return -1, fmt.Errorf("socket: %w", err)
-	}
-	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		unix.Close(fd)
-		return -1, fmt.Errorf("bind: %w", err)
-	}
-	return fd, nil
-}
-
 func SetMasquerade(spec MasqueradeSpec) error {
 	if spec.TableName == "" {
 		return fmt.Errorf("table name is empty")
