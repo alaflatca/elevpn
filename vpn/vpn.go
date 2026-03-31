@@ -73,14 +73,19 @@ func SetRouting(spec RoutingSpec) error {
 		return errors.New("tun oif name is empty")
 	}
 
-	ip4 := net.ParseIP(spec.ServerIP)
+	ip4 := net.ParseIP(spec.ServerIP).To4()
 	if ip4 == nil {
-		return fmt.Errorf("only IPv4 is supported")
+		return fmt.Errorf("invalid IPv4 address: %s", spec.ServerIP)
 	}
 
-	gateway := net.ParseIP(spec.Gateway)
+	gateway := net.ParseIP(spec.Gateway).To4()
 	if gateway == nil {
-		return fmt.Errorf("only gateway IPv4 is supported")
+		return fmt.Errorf("invalid gateway address: %s", spec.Gateway)
+	}
+
+	ifa, err := net.InterfaceByName(spec.RealOIFName)
+	if err != nil {
+		return err
 	}
 
 	fd, err := openNetlink(unix.NETLINK_ROUTE)
@@ -89,16 +94,14 @@ func SetRouting(spec RoutingSpec) error {
 	}
 	defer unix.Close(fd)
 
-	// packet =
-	// packet = append()
-	// packet = append()
-	// packet = append()
-
-	if err := unix.Sendto(fd, []byte{}, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return fmt.Errorf("send nrt: %w", err)
+	packet := buildAddHostRouteMsg(1, ip4, gateway, ifa.Index)
+	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return fmt.Errorf("send rt: %w", err)
 	}
 
-	return recvAcks(fd, 1, 2, 3)
+	// default replace 작성대기
+
+	return recvAcks(fd, 1)
 }
 
 func EnableIPForward() error {

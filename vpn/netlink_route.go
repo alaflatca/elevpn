@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"encoding/binary"
+	"net"
 
 	"golang.org/x/sys/unix"
 )
@@ -40,26 +41,53 @@ func rtgen(msg rtmsg) []byte {
 	return b
 }
 
-// NetRoute Header
-func rtMsg(attrs []byte) []byte {
-
-	return nlMsg()
+func rtMsg(seq uint32, msgType uint16, flags uint16, payload []byte) []byte {
+	return nlMsg(seq, msgType, flags, payload)
 }
 
-func buildAddHostRouteMsg(spec RoutingSpec) error {
+func buildAddHostRouteMsg(seq uint32, dst4, gw4 net.IP, oif int) []byte {
+	payload := buildAddHostRoutePayload(dst4, gw4, oif)
+
+	flags := unix.NLM_F_REQUEST | unix.NLM_F_ACK | unix.NLM_F_CREATE | unix.NLM_F_EXCL
+	packet := rtMsg(seq, unix.RTM_NEWROUTE, uint16(flags), payload)
+	return packet
+}
+
+func buildAddHostRoutePayload(ip4 net.IP, gateway net.IP, ifindex int) []byte {
 	msg := newBaseRtmsg()
 	msg.DstLen = 32
 	msg.Scope = unix.RT_SCOPE_UNIVERSE
+
 	header := rtgen(msg)
+
+	var attrs []byte
+	attrs = putAttr(attrs, unix.RTA_DST, ip4)
+	attrs = putAttr(attrs, unix.RTA_GATEWAY, gateway)
+
+	oifAttr := make([]byte, 4)
+	binary.NativeEndian.PutUint32(oifAttr[0:4], uint32(ifindex))
+	attrs = putAttr(attrs, unix.RTA_OIF, oifAttr)
+
+	payload := append(header, attrs...)
+
+	return payload
+}
+
+func buildReplaceDefaultRouteMsg(seq uint32, oif int) []byte {
+
+	payload := buildReplaceDefaultRoutePayload(oif)
 
 	return nil
 }
 
-func buildReplaceDefaultRouteMsg(tunOIFName string) error {
+func buildReplaceDefaultRoutePayload(tunOIFIndex int) []byte {
 	msg := newBaseRtmsg()
 	msg.DstLen = 0
 	msg.Scope = unix.RT_SCOPE_LINK
 	header := rtgen(msg)
+
+	var attrs []byte
+	attrs = append(attrs, unix.RTA_OIF, byte(tunOIFIndex))
 
 	return nil
 }
