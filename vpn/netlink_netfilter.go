@@ -7,10 +7,10 @@ import (
 )
 
 type MasqueradeSpec struct {
-	TableName string // vpnnat
-	ChainName string // postrouting
-	SrcCIDR   string // "10.77.0.1/24"
-	OIFName   string // "tun0"
+	TableName    string // vpnnat
+	ChainName    string // postrouting
+	SrcCIDR      string // "10.77.0.0/24"
+	OutInterface string // eth0
 }
 
 func nftMsg(seq uint32, msgType uint16, flags uint16, family byte, attrs []byte) []byte {

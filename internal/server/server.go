@@ -15,9 +15,10 @@ type Server struct {
 }
 
 type ServerConfig struct {
-	Addr    string
-	TunName string
-	CIDR    string
+	Addr         string
+	CIDR         string
+	OutInterface string
+	TunInterface string
 }
 
 func New(cfg ServerConfig) (*Server, error) {
@@ -27,7 +28,8 @@ func New(cfg ServerConfig) (*Server, error) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	device, err := tun.Create(s.cfg.TunName)
+	// 한 묶음
+	device, err := tun.Create(s.cfg.TunInterface)
 	if err != nil {
 		return err
 	}
@@ -40,12 +42,15 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := device.SetIPv4CIDR(s.cfg.CIDR); err != nil {
 		return err
 	}
+	////////
+
+	// net.inter
 
 	if err := vpn.SetMasquerade(vpn.MasqueradeSpec{
-		TableName: "vpnnat",
-		ChainName: "postrouting",
-		SrcCIDR:   s.cfg.CIDR,
-		OIFName:   s.cfg.TunName,
+		TableName:    "vpnnat",
+		ChainName:    "postrouting",
+		SrcCIDR:      s.cfg.CIDR,
+		OutInterface: "", // tun이 아님 eth0
 	}); err != nil {
 		return err
 	}

@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"elevpn/internal/tun"
+	"elevpn/vpn"
 	"fmt"
 	"net"
 	"time"
@@ -26,6 +27,7 @@ func New(cfg ClientConfig) (*Client, error) {
 }
 
 func (c *Client) Run(ctx context.Context) error {
+	// 한 묶음으로
 	device, err := tun.Create(c.cfg.TunName)
 	if err != nil {
 		return err
@@ -37,6 +39,13 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 
 	if err := device.SetIPv4CIDR(c.cfg.CIDR); err != nil {
+		return err
+	}
+	////////////
+
+	if err := vpn.SetRouting(vpn.RoutingSpec{
+		ServerIP: c.cfg.ServerAddr,
+	}); err != nil {
 		return err
 	}
 

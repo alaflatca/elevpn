@@ -24,9 +24,9 @@ var serverCmd = &cobra.Command{
 		fmt.Printf("[server] init listen=%s tun=%s cidr=%s\n", serverListen, serverTun, serverCIDR)
 
 		svr, err := server.New(server.ServerConfig{
-			Addr:    serverListen,
-			TunName: serverTun,
-			CIDR:    serverCIDR,
+			Addr:         serverListen,
+			TunInterface: serverTun,
+			CIDR:         serverCIDR,
 		})
 		if err != nil {
 			return err

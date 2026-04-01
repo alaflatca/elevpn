@@ -110,8 +110,17 @@ func openNetlink(proto int) (int, error) {
 // 데이터 수신
 // NLMSG_ERROR 데이터 구조
 // Netlink Header  (16 byte)
-// Error Code	   (4  byte)
-// Original Header (16 byte) 내가 보냈던 요청 헤더 그대로 돌려줌 (발신자 확인용)
+// Netlink Header
+//     [Length    (4 bytes)] *응답 메시지 전체 길이
+//     [type      (2 bytes)] *항상 2(NLMSG_ERROR)
+//     [Flags     (2 bytes)] *응답 관련 플래그
+//     [Sequence  (4 bytes)] *내가 보냈던 요청의 일련번호가 그대로 돌아옴
+//     [PortID    (4 bytes)] *내 프로세스 ID
+
+// Error Payload
+//     [Errno     (4 bytes)] *0이면 성공, 음수면 실패
+//     [Original Header (16 bytes)] *요청했을때 헤더를 돌려줌 (발신자 확인 가능 및 이 요청에 대한 답장이라는걸 확인 시켜주는 용도)
+
 func recvAcks(fd int, want ...uint32) error {
 	expected := make(map[uint32]bool, len(want))
 	for _, seq := range want {

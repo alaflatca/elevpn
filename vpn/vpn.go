@@ -16,11 +16,11 @@ func SetMasquerade(spec MasqueradeSpec) error {
 	if spec.ChainName == "" {
 		return fmt.Errorf("chain name is empty")
 	}
-	if spec.OIFName == "" {
+	if spec.OutInterface == "" {
 		return fmt.Errorf("table name is empty")
 	}
-	if len(spec.OIFName) >= 16 {
-		return fmt.Errorf("oif name too long: %q", spec.OIFName)
+	if len(spec.OutInterface) >= 16 {
+		return fmt.Errorf("oif name too long: %q", spec.OutInterface)
 	}
 
 	_, ipnet, err := net.ParseCIDR(spec.SrcCIDR)
@@ -48,7 +48,7 @@ func SetMasquerade(spec MasqueradeSpec) error {
 	packet := batchMsg(1, nfnlMsgBatchBegin)
 	packet = append(packet, buildNewTableMsg(2, spec.TableName)...)
 	packet = append(packet, buildNewChainMsg(3, spec.TableName, spec.ChainName)...)
-	packet = append(packet, buildNewMasqRuleMsg(4, spec.TableName, spec.ChainName, ip4, mask4, spec.OIFName)...)
+	packet = append(packet, buildNewMasqRuleMsg(4, spec.TableName, spec.ChainName, ip4, mask4, spec.OutInterface)...)
 	packet = append(packet, batchMsg(5, nfnlMsgBatchEnd)...)
 
 	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
@@ -87,6 +87,17 @@ func SetRouting(spec RoutingSpec) error {
 	if err != nil {
 		return err
 	}
+	if ifa.Index < 0 {
+		return fmt.Errorf("invalid %q interface index", spec.RealOIFName)
+	}
+
+	tunIfa, err := net.InterfaceByName(spec.TunOIFName)
+	if err != nil {
+		return err
+	}
+	if tunIfa.Index < 0 {
+		return fmt.Errorf("invalid %q interface index", spec.TunOIFName)
+	}
 
 	fd, err := openNetlink(unix.NETLINK_ROUTE)
 	if err != nil {
@@ -98,10 +109,19 @@ func SetRouting(spec RoutingSpec) error {
 	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return fmt.Errorf("send rt: %w", err)
 	}
+	if err := recvAcks(fd, 1); err != nil {
+		return err
+	}
 
-	// default replace 작성대기
+	packet = buildReplaceDefaultRouteMsg(2, tunIfa.Index)
+	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return fmt.Errorf("send rt: %w", err)
+	}
+	if err := recvAcks(fd, 2); err != nil {
+		return err
+	}
 
-	return recvAcks(fd, 1)
+	return nil
 }
 
 func EnableIPForward() error {
