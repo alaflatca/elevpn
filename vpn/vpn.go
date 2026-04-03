@@ -124,6 +124,21 @@ func SetRouting(spec RoutingSpec) error {
 	return nil
 }
 
+func ExternalInterface() error {
+	// NETLINK_NETFILTER 소켓 생성/바인드
+	fd, err := openNetlink(unix.NETLINK_ROUTE)
+	if err != nil {
+		return fmt.Errorf("open NETLINK_NETFILTER: %w", err)
+	}
+	defer unix.Close(fd)
+
+	if _, err := GetDefaultExternalInterface(fd); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func EnableIPForward() error {
 	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0644)
 }

@@ -2,6 +2,8 @@ AF_Netlink
     - NETLINK_NETFILTER : netfilter 서브시스템용 
     - NETLINK_ROUTE     : 라우팅, 링크, 주소 제어용
 
+* 여기서 Payload란 Nelink Header를 제외한 나머지들을 Payload 라고 함 ( Payload = B + C )
+
 1. 송신 데이터 구조 (Request)
 
 A.  Netlink Header (16 bytes)
@@ -41,21 +43,50 @@ C. Attributes  (실제 데이터 - TLV 방식)
 * 송신 시 페이로드
     - [Netfilter Header] + [Attributes]
     - [Route Header] + [Attributes]
+    = B + C
 
 2. 수신 데이터 구조 (Response)
 
-Netlink Header 
+A. Netlink Header (16 bytes)
     [Length    (4 bytes)] *응답 메시지 전체 길이
-    [type      (2 bytes)] *항상 2(NLMSG_ERROR)
+    [type      (2 bytes)] *2(NLMSG_ERROR), 24(RTM_NEWROUTE), 타입에 따라 페이로드 구조가 달라짐
     [Flags     (2 bytes)] *응답 관련 플래그
     [Sequence  (4 bytes)] *내가 보냈던 요청의 일련번호가 그대로 돌아옴
     [PortID    (4 bytes)] *내 프로세스 ID
 
-Error Payload
+*Header의 type에 따라 Payload가 달라짐
+
+B. type = 2, Error Payload 구조로 읽어야됨
     [Errno     (4 bytes)] *0이면 성공, 음수면 실패
     [Original Header (16 bytes)] *요청했을때 헤더를 돌려줌 (발신자 확인 가능 및 이 요청에 대한 답장이라는걸 확인 시켜주는 용도)
 
-* 수신 시 페이로드 = [Errno] + [Original Header]
+B. type = 24, Route Payload 구조로 읽어야됨
+ ROUTE Header (12 bytes)
+    [Family     (1 byte)]
+    [dst_len    (1 byte)]
+    [src_len    (1 byte)]
+    [tos        (1 byte)]
+    [table      (1 byte)]
+    [protocol   (1 byte)]
+    [scope      (1 byte)]
+    [type       (1 byte)]
+    [flags      (4 byte)]
+ Attributes
+    [Attr Length (2 bytes)]
+    [Attr Type   (2 bytes)]
+    [Value       (가변)]
+    [Padding     (전체 데이터가 길이가 4의 배수로)]
 
 
-※ 페이로드란 Netlink Header(앞부분 16바이트)를 제외한 나머지모ㅁ든 데이터 부위를 말한다.
+
+※ 페이로드란 Netlink Header(앞부분 16바이트)를 제외한 나머지 모든 데이터 부위를 말한다.
+
+
+※ 넷링크 메세지란: nlmsgHdr(netlink header) + payload(error,route header + attrs) 
+
+NLM_F_DUMP 플래그 사용 X, unix.RecvFrom을 사용하면, 단일 넷링크 메세지 응답
+[Header][RouteHeader][Attrs...][Padding]
+
+NLM_F_DUMP 플래그 사용 O, unix.RecvFrom을 사용하면, 다중 넷링크 메세지 응답
+[Header][RouteHeader][Attrs...][Padding][Header][RouteHeader][Attrs...][Padding][Header][RouteHeader][Attrs...][Padding]
+[Header][RouteHeader][Attrs...][Padding][Header][RouteHeader][Attrs...][Padding]

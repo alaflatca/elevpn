@@ -1,6 +1,13 @@
 package vpn
 
-import "golang.org/x/sys/unix"
+import (
+	"encoding/binary"
+	"fmt"
+	"log"
+	"net"
+
+	"golang.org/x/sys/unix"
+)
 
 func GetDefaultExternalInterface(fd int) (string, error) {
 	rtmsg := newBaseRtmsg()
@@ -11,18 +18,99 @@ func GetDefaultExternalInterface(fd int) (string, error) {
 		return "", err
 	}
 
-	recvRoutesAck(fd, 1)
+	if err := recvRoutesAck(fd, 1); err != nil {
+		return "", err
+	}
 
 	return "", nil
 }
 
-func recvRoutesAck(fd int, want ...uint32) error {
-	buf := make([]byte, 64*1024)
-
-	n, _, err := unix.Recvfrom(fd, buf, 0)
-	if err != nil {
-
+// unix.NLM_F_DUMP 플래그는 커널에서 "경로가 너무 많으니 여러 번 나눠서 보냄"
+// 마지막에 Type = 3 (NLMSG_DONE)  메세지를 하나 보냄
+func recvRoutesAck(fd int, want uint32) error {
+	if err := setSocketTimeout(fd, 5); err != nil {
+		return err
 	}
 
+	buf := make([]byte, 64*1024)
+	for {
+		n, _, err := unix.Recvfrom(fd, buf, 0)
+		if err != nil {
+			if err == unix.EINTR { // EINTR == interrupt
+				continue
+			}
+			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+				return fmt.Errorf("netlink response timeout: 커널 응답이 업습니다.")
+			}
+			if err == unix.ENOBUFS {
+				return fmt.Errorf("netlink receive buffer overflow: 데이터 유실가능성")
+			}
+			return fmt.Errorf("recvfrom fatal error: %w", err)
+		}
+
+		// 최소한 넷링크 헤더(16)는 읽을 수 있는 길이어야함
+		pos := 0
+		for pos+unix.NLMSG_HDRLEN <= n {
+			// Nelink Header 읽기
+			msgLength := binary.NativeEndian.Uint32(buf[pos : pos+4])
+			msgType := binary.NativeEndian.Uint16(buf[pos+4 : pos+6])
+			msgSeq := binary.NativeEndian.Uint32(buf[pos+8 : pos+12])
+			nextMsgPos := pos + align4(int(msgLength))
+
+			if msgSeq != want {
+				pos = nextMsgPos
+				continue
+			}
+
+			switch msgType {
+			case unix.NLMSG_DONE: // NLM_F_DUMP ---> NLMSG_DONE(끝났음을 의미)
+				return nil
+			case unix.NLMSG_ERROR:
+				return fmt.Errorf("nlmsg error: %v", msgType)
+			case 24:
+				endPos := pos + int(msgLength)
+
+				pos += 28 // flags, sequence, portID 패스 +  Route Header 패스
+				for pos+4 <= endPos {
+					attrLength := binary.NativeEndian.Uint16(buf[pos : pos+2])
+					attrType := binary.NativeEndian.Uint16(buf[pos+2 : pos+4])
+
+					if attrLength < 4 || pos+int(attrLength) > endPos {
+						break
+					}
+					attrValue := buf[pos+4 : pos+int(attrLength)]
+
+					if attrType == unix.RTA_OIF {
+						if len(attrValue) < 4 {
+							log.Printf("attr value is short: %v", len(attrValue))
+							continue
+						}
+
+						ifindex := binary.NativeEndian.Uint32(attrValue)
+						ifr, err := net.InterfaceByIndex(int(ifindex))
+						if err != nil {
+							log.Printf("invalid interface by index: %v", ifindex)
+							continue
+						}
+						log.Printf("found external interface : %+v", ifr) // 아직 정확히 external interface 를 찾은게 아님 따로 구별 하는 로직이있어야함 임시
+					}
+
+					pad := align4(int(attrLength))
+					pos += pad
+				}
+			}
+			pos = nextMsgPos
+		}
+	}
+}
+
+func setSocketTimeout(fd int, sec int64) error {
+	tv := &unix.Timeval{
+		Sec:  sec,
+		Usec: 0,
+	}
+	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, tv); err != nil {
+		return fmt.Errorf("failed to socket timeout: %w", err)
+	}
 	return nil
 }

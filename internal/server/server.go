@@ -42,10 +42,14 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := device.SetIPv4CIDR(s.cfg.CIDR); err != nil {
 		return err
 	}
-	////////
+
+	if err := vpn.ExternalInterface(); err != nil {
+		return err
+	}
+
+	return nil
 
 	// net.inter
-
 	if err := vpn.SetMasquerade(vpn.MasqueradeSpec{
 		TableName:    "vpnnat",
 		ChainName:    "postrouting",
