@@ -43,21 +43,24 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	if err := vpn.ExternalInterface(); err != nil {
+	externalIfr, err := vpn.ExternalInterface()
+	if err != nil {
 		return err
 	}
-
+	log.Printf("external interface %q", externalIfr)
 	return nil
 
-	// net.inter
-	if err := vpn.SetMasquerade(vpn.MasqueradeSpec{
+	masquerade := vpn.NewMasquerade(vpn.MasqueradeSpec{
 		TableName:    "vpnnat",
 		ChainName:    "postrouting",
 		SrcCIDR:      s.cfg.CIDR,
-		OutInterface: "", // tun이 아님 eth0
-	}); err != nil {
+		OutInterface: externalIfr,
+	})
+
+	if err := masquerade.Apply(); err != nil {
 		return err
 	}
+	defer masquerade.Cleanup()
 
 	if err := vpn.EnableIPForward(); err != nil {
 		return err

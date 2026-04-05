@@ -18,18 +18,19 @@ func GetDefaultExternalInterface(fd int) (string, error) {
 		return "", err
 	}
 
-	if err := recvRoutesAck(fd, 1); err != nil {
+	ifr, err := recvRoutesAck(fd, 1)
+	if err != nil {
 		return "", err
 	}
 
-	return "", nil
+	return ifr, nil
 }
 
 // unix.NLM_F_DUMP 플래그는 커널에서 "경로가 너무 많으니 여러 번 나눠서 보냄"
 // 마지막에 Type = 3 (NLMSG_DONE)  메세지를 하나 보냄
-func recvRoutesAck(fd int, want uint32) error {
+func recvRoutesAck(fd int, want uint32) (string, error) {
 	if err := setSocketTimeout(fd, 5); err != nil {
-		return err
+		return "", err
 	}
 
 	buf := make([]byte, 64*1024)
@@ -39,13 +40,14 @@ func recvRoutesAck(fd int, want uint32) error {
 			if err == unix.EINTR { // EINTR == interrupt
 				continue
 			}
+			// EAGAIN = Error AGAIN
 			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
-				return fmt.Errorf("netlink response timeout: 커널 응답이 업습니다.")
+				return "", fmt.Errorf("netlink response timeout: 커널 응답이 업습니다.")
 			}
 			if err == unix.ENOBUFS {
-				return fmt.Errorf("netlink receive buffer overflow: 데이터 유실가능성")
+				return "", fmt.Errorf("netlink receive buffer overflow: 데이터 유실가능성")
 			}
-			return fmt.Errorf("recvfrom fatal error: %w", err)
+			return "", fmt.Errorf("recvfrom fatal error: %w", err)
 		}
 
 		// 최소한 넷링크 헤더(16)는 읽을 수 있는 길이어야함
@@ -54,7 +56,10 @@ func recvRoutesAck(fd int, want uint32) error {
 			// Nelink Header 읽기
 			msgLength := binary.NativeEndian.Uint32(buf[pos : pos+4])
 			msgType := binary.NativeEndian.Uint16(buf[pos+4 : pos+6])
+			// flags 생략,  msgFlags := binary.NativeEndian.Uint16(buf[pos+6 : pos+8])
 			msgSeq := binary.NativeEndian.Uint32(buf[pos+8 : pos+12])
+			// portID 생략, msgPortID := binary.NativeEndian.Uint32(buf[pos+12 : pos+16])
+
 			nextMsgPos := pos + align4(int(msgLength))
 
 			if msgSeq != want {
@@ -64,13 +69,21 @@ func recvRoutesAck(fd int, want uint32) error {
 
 			switch msgType {
 			case unix.NLMSG_DONE: // NLM_F_DUMP ---> NLMSG_DONE(끝났음을 의미)
-				return nil
+				return "", fmt.Errorf("default external interface not found in routing table ")
 			case unix.NLMSG_ERROR:
-				return fmt.Errorf("nlmsg error: %v", msgType)
+				return "", fmt.Errorf("nlmsg error: %v", msgType)
 			case 24:
 				endPos := pos + int(msgLength)
 
-				pos += 28 // flags, sequence, portID 패스 +  Route Header 패스
+				// 디폴트 인터페이스 구별
+				dstLen := buf[pos+17] // 목적지 ip의 prefix 0 ~ 32
+				table := buf[pos+20]  // 메인 라우팅 테이블
+
+				if dstLen != 0 || table != 254 {
+					break
+				}
+
+				pos += 28 //   Route Header 패스
 				for pos+4 <= endPos {
 					attrLength := binary.NativeEndian.Uint16(buf[pos : pos+2])
 					attrType := binary.NativeEndian.Uint16(buf[pos+2 : pos+4])
@@ -93,6 +106,7 @@ func recvRoutesAck(fd int, want uint32) error {
 							continue
 						}
 						log.Printf("found external interface : %+v", ifr) // 아직 정확히 external interface 를 찾은게 아님 따로 구별 하는 로직이있어야함 임시
+						return ifr.Name, nil
 					}
 
 					pad := align4(int(attrLength))
