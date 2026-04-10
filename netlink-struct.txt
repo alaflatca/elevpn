@@ -4,7 +4,9 @@ AF_Netlink
 
 * 여기서 Payload란 Nelink Header를 제외한 나머지들을 Payload 라고 함 ( Payload = B + C )
 
+=============================
 1. 송신 데이터 구조 (Request)
+=============================
 
 A.  Netlink Header (16 bytes)
     [Length   (4 bytes)] *이 전체 메시지(헤더 + 페이로드)의 총 길이
@@ -45,7 +47,9 @@ C. Attributes  (실제 데이터 - TLV 방식)
     - [Route Header] + [Attributes]
     = B + C
 
+=============================
 2. 수신 데이터 구조 (Response)
+=============================
 
 A. Netlink Header (16 bytes)
     [Length    (4 bytes)] *응답 메시지 전체 길이
