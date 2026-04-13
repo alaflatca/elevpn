@@ -7,13 +7,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type RoutingSpec struct {
-	ServerIP    string
-	Gateway     string
-	RealOIFName string
-	TunOIFName  string
-}
-
 type rtmsg struct {
 	Family   byte
 	DstLen   byte
@@ -40,6 +33,8 @@ func rtgen(msg rtmsg) []byte {
 
 	return b
 }
+
+// func buildDelHostRouteMsg(seq uint32)
 
 func buildAddHostRouteMsg(seq uint32, dst4, gw4 net.IP, oif int) []byte {
 	payload := buildAddHostRoutePayload(dst4, gw4, oif)

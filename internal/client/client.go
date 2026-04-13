@@ -43,11 +43,14 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 	////////////
 
-	if err := vpn.SetRouting(vpn.RoutingSpec{
+	route := vpn.NewRoute(vpn.RouteSpec{
 		ServerIP: c.cfg.ServerAddr,
-	}); err != nil {
+	})
+
+	if err := route.Apply(); err != nil {
 		return err
 	}
+	defer route.Cleanup()
 
 	addr, err := c.ListenUDP(ctx)
 	if err != nil {
