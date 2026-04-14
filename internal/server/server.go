@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"elevpn/internal/tun"
+	"elevpn/internal/vpn"
 	"elevpn/vpn"
 	"fmt"
 	"log"
@@ -29,26 +30,12 @@ func New(cfg ServerConfig) (*Server, error) {
 
 func (s *Server) Run(ctx context.Context) error {
 	// 한 묶음
-	device, err := tun.Create(s.cfg.TunInterface)
-	if err != nil {
-		return err
-	}
-	defer device.Close()
-
-	if err := device.SetUp(); err != nil {
-		return err
-	}
-
-	if err := device.SetIPv4CIDR(s.cfg.CIDR); err != nil {
-		return err
-	}
+	tun := tun.New(s.cfg.TunInterface, s.cfg.CIDR)
 
 	externalIfr, err := vpn.ExternalInterface()
 	if err != nil {
 		return err
 	}
-	log.Printf("external interface %q", externalIfr)
-	return nil
 
 	masquerade := vpn.NewMasquerade(vpn.MasqueradeSpec{
 		TableName:    "vpnnat",
@@ -56,6 +43,12 @@ func (s *Server) Run(ctx context.Context) error {
 		SrcCIDR:      s.cfg.CIDR,
 		OutInterface: externalIfr,
 	})
+
+	manager := vpn.VpnManager{}
+	if err := manager.RegisterAndApply(tun); err != nil {
+		return err
+	}
+	manager.RegisterAndApply(masquerade)
 
 	if err := masquerade.Apply(); err != nil {
 		return err

@@ -3,7 +3,7 @@ package client
 import (
 	"context"
 	"elevpn/internal/tun"
-	"elevpn/vpn"
+	"elevpn/internal/vpn"
 	"fmt"
 	"net"
 	"time"
@@ -27,30 +27,19 @@ func New(cfg ClientConfig) (*Client, error) {
 }
 
 func (c *Client) Run(ctx context.Context) error {
-	// 한 묶음으로
-	device, err := tun.Create(c.cfg.TunName)
-	if err != nil {
-		return err
-	}
-	defer device.Close()
-
-	if err := device.SetUp(); err != nil {
-		return err
-	}
-
-	if err := device.SetIPv4CIDR(c.cfg.CIDR); err != nil {
-		return err
-	}
-	////////////
+	tun := tun.New(c.cfg.TunName, c.cfg.CIDR)
 
 	route := vpn.NewRoute(vpn.RouteSpec{
 		ServerIP: c.cfg.ServerAddr,
 	})
 
-	if err := route.Apply(); err != nil {
+	manager := vpn.VpnManager{}
+	if err := manager.RegisterAndApply(tun); err != nil {
 		return err
 	}
-	defer route.Cleanup()
+	if err := manager.RegisterAndApply(route); err != nil {
+		return err
+	}
 
 	addr, err := c.ListenUDP(ctx)
 	if err != nil {

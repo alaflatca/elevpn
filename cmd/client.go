@@ -33,16 +33,13 @@ var clientCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := cli.Run(cmd.Context()); err != nil {
-			return err
-		}
 
-		return nil
+		return cli.Run(cmd.Context())
 	},
 }
 
 func init() {
-	clientCmd.Flags().StringVar(&clientListen, "listen", "0.0.0.0:9020", "elevpn local UDP address")
+	clientCmd.Flags().StringVar(&clientListen, "listen", ":0", "elevpn local UDP address")
 	clientCmd.Flags().StringVar(&clientServer, "server", "0.0.0.0:9010", "elevpn server UDP address")
 	clientCmd.Flags().StringVar(&clientTun, "tun", "tun1", "TUN device name")
 	clientCmd.Flags().StringVar(&clientCIDR, "cidr", "10.77.0.2/32", "TUN interface CIDR (client)")

@@ -34,7 +34,9 @@ func rtgen(msg rtmsg) []byte {
 	return b
 }
 
-// func buildDelHostRouteMsg(seq uint32)
+func buildDelHostRouteMsg(seq uint32) {
+
+}
 
 func buildAddHostRouteMsg(seq uint32, dst4, gw4 net.IP, oif int) []byte {
 	payload := buildAddHostRoutePayload(dst4, gw4, oif)
