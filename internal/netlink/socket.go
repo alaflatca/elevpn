@@ -1,4 +1,4 @@
-package vpn
+package netlink
 
 import (
 	"encoding/binary"

@@ -1,11 +1,10 @@
 package vpn
 
 import (
+	"elevpn/internal/netlink"
 	"errors"
 	"fmt"
 	"net"
-
-	"golang.org/x/sys/unix"
 )
 
 type RouteSpec struct {
@@ -33,15 +32,22 @@ func (r *Route) Apply() error {
 }
 
 func (r *Route) Cleanup() error {
-	return nil
-}
-
-func UnsetRoute() error {
-	fd, err := openNetlink(unix.NETLINK_ROUTE)
-	if err != nil {
-		return fmt.Errorf("open NETLINK_ROUTE: %w", err)
+	ip4 := net.ParseIP(r.spec.ServerIP).To4()
+	gateway := net.ParseIP(r.spec.Gateway).To4()
+	if ip4 == nil || gateway == nil {
+		return fmt.Errorf("only IPv4 is supported")
 	}
-	defer unix.Close(fd)
+
+	ifa, err := net.InterfaceByName(r.spec.RealOIFName)
+	if err != nil {
+		return err
+	}
+	if ifa.Index < 0 {
+		return fmt.Errorf("invalid %q interface index", spec.RealOIFName)
+	}
+
+	netlink.DelHostRoute(ip4, gateway, ifa.Index)
+
 	return nil
 }
 
@@ -60,13 +66,9 @@ func SetRoute(spec RouteSpec) error {
 	}
 
 	ip4 := net.ParseIP(spec.ServerIP).To4()
-	if ip4 == nil {
-		return fmt.Errorf("invalid IPv4 address: %s", spec.ServerIP)
-	}
-
 	gateway := net.ParseIP(spec.Gateway).To4()
-	if gateway == nil {
-		return fmt.Errorf("invalid gateway address: %s", spec.Gateway)
+	if ip4 == nil || gateway == nil {
+		return fmt.Errorf("only IPv4 is supported")
 	}
 
 	ifa, err := net.InterfaceByName(spec.RealOIFName)
@@ -85,25 +87,11 @@ func SetRoute(spec RouteSpec) error {
 		return fmt.Errorf("invalid %q interface index", spec.TunOIFName)
 	}
 
-	fd, err := openNetlink(unix.NETLINK_ROUTE)
-	if err != nil {
-		return fmt.Errorf("open NETLINK_ROUTE: %w", err)
-	}
-	defer unix.Close(fd)
-
-	packet := buildAddHostRouteMsg(1, ip4, gateway, ifa.Index)
-	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return fmt.Errorf("send rt: %w", err)
-	}
-	if err := recvAcks(fd, 1); err != nil {
+	if err := netlink.AddHostRoute(ip4, gateway, ifa.Index); err != nil {
 		return err
 	}
 
-	packet = buildReplaceDefaultRouteMsg(2, tunIfa.Index)
-	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return fmt.Errorf("send rt: %w", err)
-	}
-	if err := recvAcks(fd, 2); err != nil {
+	if err := netlink.ReplaceDefaultRoute(tunIfa.Index); err != nil {
 		return err
 	}
 

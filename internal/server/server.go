@@ -4,7 +4,6 @@ import (
 	"context"
 	"elevpn/internal/tun"
 	"elevpn/internal/vpn"
-	"elevpn/vpn"
 	"fmt"
 	"log"
 	"net"
@@ -29,31 +28,35 @@ func New(cfg ServerConfig) (*Server, error) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	// 한 묶음
-	tun := tun.New(s.cfg.TunInterface, s.cfg.CIDR)
+	manager := vpn.VpnManager{}
+	defer manager.Teardown()
 
 	externalIfr, err := vpn.ExternalInterface()
 	if err != nil {
 		return err
 	}
+	log.Printf("external interface: %q", externalIfr)
+	return nil
 
+	// 한 묶음
+	tun := tun.New(s.cfg.TunInterface, s.cfg.CIDR)
+	if err := manager.RegisterAndApply(tun); err != nil {
+		return err
+	}
+
+	// externalIfr, err := vpn.ExternalInterface()
+	// if err != nil {
+	// 	return err
+	// }
 	masquerade := vpn.NewMasquerade(vpn.MasqueradeSpec{
 		TableName:    "vpnnat",
 		ChainName:    "postrouting",
 		SrcCIDR:      s.cfg.CIDR,
 		OutInterface: externalIfr,
 	})
-
-	manager := vpn.VpnManager{}
-	if err := manager.RegisterAndApply(tun); err != nil {
+	if err := manager.RegisterAndApply(masquerade); err != nil {
 		return err
 	}
-	manager.RegisterAndApply(masquerade)
-
-	if err := masquerade.Apply(); err != nil {
-		return err
-	}
-	defer masquerade.Cleanup()
 
 	if err := vpn.EnableIPForward(); err != nil {
 		return err

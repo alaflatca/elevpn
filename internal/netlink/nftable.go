@@ -1,10 +1,41 @@
-package vpn
+package netlink
 
 import (
+	"fmt"
 	"net"
 
 	"golang.org/x/sys/unix"
 )
+
+type NFTMasqConfig struct {
+	TableName    string
+	ChainName    string
+	SrcIP        net.IP
+	SrcMask      net.IP
+	OutInterface string
+}
+
+func ApplyMasquerade(spec NFTMasqConfig) error {
+	// NETLINK_NETFILTER 소켓 생성/바인드
+	fd, err := openNetlink(unix.NETLINK_NETFILTER)
+	if err != nil {
+		return fmt.Errorf("open NETLINK_NETFILTER: %w", err)
+	}
+	defer unix.Close(fd)
+
+	packet := batchMsg(1, nfnlMsgBatchBegin)
+	packet = append(packet, buildNewTableMsg(2, spec.TableName)...)
+	packet = append(packet, buildNewChainMsg(3, spec.TableName, spec.ChainName)...)
+	packet = append(packet, buildNewMasqRuleMsg(4, spec.TableName, spec.ChainName, spec.SrcIP, spec.SrcMask, spec.OutInterface)...)
+	packet = append(packet, batchMsg(5, nfnlMsgBatchEnd)...)
+
+	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return fmt.Errorf("send nft batch: %w", err)
+	}
+
+	// return recvAcks(fd, 1, 2, 3, 4, 5)
+	return recvAcks(fd, 2, 3, 4)
+}
 
 func nftMsg(seq uint32, msgType uint16, flags uint16, family byte, attrs []byte) []byte {
 	// msgType이 만약 8이라고 가정한다면

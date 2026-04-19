@@ -1,4 +1,4 @@
-package vpn
+package netlink
 
 import (
 	"encoding/binary"
@@ -9,7 +9,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func GetDefaultExternalInterface(fd int) (string, error) {
+func GetDefaultExternalInterface() (string, error) {
+	fd, err := openNetlink(unix.NETLINK_ROUTE)
+	if err != nil {
+		return "", err
+	}
+	defer unix.Close(fd)
+
+	externalInterface, err := getDefaultExternalInterface(fd)
+	if err != nil {
+		return "", err
+	}
+
+	return externalInterface, nil
+}
+
+func getDefaultExternalInterface(fd int) (string, error) {
 	rtmsg := newBaseRtmsg()
 	header := rtgen(rtmsg)
 	packet := nlMsg(1, unix.RTM_GETROUTE, unix.NLM_F_REQUEST|unix.NLM_F_DUMP, header)
