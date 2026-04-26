@@ -42,11 +42,14 @@ func (r *Route) Cleanup() error {
 	if err != nil {
 		return err
 	}
-	if ifa.Index < 0 {
-		return fmt.Errorf("invalid %q interface index", spec.RealOIFName)
+
+	if err := netlink.RestoreDefaultRoute(gateway, ifa.Index); err != nil {
+		return err
 	}
 
-	netlink.DelHostRoute(ip4, gateway, ifa.Index)
+	if err := netlink.DelHostRoute(ip4, gateway, ifa.Index); err != nil {
+		return err
+	}
 
 	return nil
 }

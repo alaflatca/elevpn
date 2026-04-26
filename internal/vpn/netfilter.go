@@ -58,6 +58,10 @@ func (m *Masquerade) Apply() error {
 }
 
 func (m *Masquerade) Cleanup() error {
+	if err := netlink.DeleteMasqueradeTable(m.spec.TableName); err != nil {
+		return err
+	}
+
 	return nil
 }
 

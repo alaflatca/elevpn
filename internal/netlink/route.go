@@ -68,6 +68,21 @@ func DelHostRoute(ipv4, gateway net.IP, ifIndex int) error {
 	return nil
 }
 
+func RestoreDefaultRoute(gateway net.IP, ifIndex int) error {
+	fd, err := openNetlink(unix.NETLINK_ROUTE)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+
+	packet := buildRestoreDefaultRoute(1, gateway, ifIndex)
+	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return err
+	}
+
+	return recvAcks(fd, 1)
+}
+
 func ReplaceDefaultRoute(ifIndex int) error {
 	fd, err := openNetlink(unix.NETLINK_ROUTE)
 	if err != nil {
@@ -80,11 +95,7 @@ func ReplaceDefaultRoute(ifIndex int) error {
 		return err
 	}
 
-	if err := recvAcks(fd, 1); err != nil {
-		return err
-	}
-
-	return nil
+	return recvAcks(fd, 1)
 }
 
 func buildRoutePayload(dstLen uint8, scope uint8, dst, gw net.IP, ifIndex int) []byte {
@@ -130,7 +141,7 @@ func buildReplaceDefaultRoute(seq uint32, ifIndex int) []byte {
 	return nlMsg(seq, unix.RTM_NEWROUTE, uint16(flags), payload)
 }
 
-func buildRestoreDefaultRoute(seq uint32, scope uint8, gw net.IP, ifIndex int) []byte {
+func buildRestoreDefaultRoute(seq uint32, gw net.IP, ifIndex int) []byte {
 	payload := buildRoutePayload(0, unix.RT_SCOPE_UNIVERSE, nil, gw, ifIndex)
 	flags := unix.NLM_F_REQUEST | unix.NLM_F_ACK | unix.NLM_F_CREATE | unix.NLM_F_REPLACE
 

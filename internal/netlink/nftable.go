@@ -1,6 +1,7 @@
 package netlink
 
 import (
+	"errors"
 	"fmt"
 	"net"
 
@@ -13,6 +14,27 @@ type NFTMasqConfig struct {
 	SrcIP        net.IP
 	SrcMask      net.IP
 	OutInterface string
+}
+
+func DeleteMasqueradeTable(tableName string) error {
+	if tableName == "" {
+		return errors.New("table name is empty")
+	}
+	fd, err := openNetlink(unix.NETLINK_NETFILTER)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+
+	packet := batchMsg(1, nfnlMsgBatchBegin)
+	packet = append(packet, buildDelTableMsg(2, tableName)...)
+	packet = append(packet, batchMsg(3, nfnlMsgBatchEnd)...)
+
+	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return err
+	}
+
+	return recvAcks(fd, 2)
 }
 
 func ApplyMasquerade(spec NFTMasqConfig) error {
@@ -43,6 +65,13 @@ func nftMsg(seq uint32, msgType uint16, flags uint16, family byte, attrs []byte)
 	typ := uint16((nfnlSubsysNftables << 8) | int(msgType))
 	body := append(nfgen(family, 0), attrs...)
 	return nlMsg(seq, typ, flags, body)
+}
+
+func buildDelTableMsg(seq uint32, tableName string) []byte {
+	var attrs []byte
+	attrs = putAttr(attrs, nftaTableName, zstr(tableName))
+	flags := uint16(unix.NLM_F_REQUEST | unix.NLM_F_ACK)
+	return nftMsg(seq, nftMsgDelTable, flags, nfprotoIPv4, attrs)
 }
 
 func buildNewTableMsg(seq uint32, tableName string) []byte {

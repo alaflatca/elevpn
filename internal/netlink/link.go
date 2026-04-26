@@ -44,7 +44,7 @@ func getDefaultExternalInterface(fd int) (string, error) {
 // unix.NLM_F_DUMP 플래그는 커널에서 "경로가 너무 많으니 여러 번 나눠서 보냄"
 // 마지막에 Type = 3 (NLMSG_DONE)  메세지를 하나 보냄
 func recvRoutesAck(fd int, want uint32) (string, error) {
-	if err := setSocketTimeout(fd, 5); err != nil {
+	if err := setSocketTimeout(fd, 1); err != nil {
 		return "", err
 	}
 

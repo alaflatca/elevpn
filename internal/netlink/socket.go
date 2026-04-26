@@ -21,6 +21,7 @@ const (
 
 	// nft message types
 	nftMsgNewTable = 0
+	nftMsgDelTable = 2
 	nftMsgNewChain = 3
 	nftMsgNewRule  = 6
 

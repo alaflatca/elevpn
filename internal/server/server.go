@@ -36,7 +36,6 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	log.Printf("external interface: %q", externalIfr)
-	return nil
 
 	// 한 묶음
 	tun := tun.New(s.cfg.TunInterface, s.cfg.CIDR)
@@ -44,10 +43,6 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	// externalIfr, err := vpn.ExternalInterface()
-	// if err != nil {
-	// 	return err
-	// }
 	masquerade := vpn.NewMasquerade(vpn.MasqueradeSpec{
 		TableName:    "vpnnat",
 		ChainName:    "postrouting",

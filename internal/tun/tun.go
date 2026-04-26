@@ -20,11 +20,18 @@ type Tun struct {
 }
 
 func New(name string, cidr string) *Tun {
-	return &Tun{name: name}
+	return &Tun{name: name, cidr: cidr}
 }
 func (t *Tun) Apply() error {
-	err := t.create()
-	if err != nil {
+	if err := t.create(); err != nil {
+		return err
+	}
+
+	if err := t.setIPv4CIDR(t.cidr); err != nil {
+		return err
+	}
+
+	if err := t.setUp(); err != nil {
 		return err
 	}
 
