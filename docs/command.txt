@@ -17,9 +17,9 @@ nftables netlink spec도 newtable, newchain, newrule 같은 연산을 별도로 
 
 [Client]
 1. VPN 서버 공인 IP로 가는 예외 route
-ip route add <server_ip>/32 via <real_gateway> dev <real_nic>
+ip route add <endpoint>/32 via <real_gateway> dev <real_nic>
 
-2. default를 tun으로 돌리는 route
+2. default를 tun으로 변경하는 route
 ip route replace default dev <tun_nic>
 
 이 두 개를 넣는 이유는, 일반 트래픽은 tun0로 모으고 싶지만 VPN 서버로 보내는 UDP 자체는 원래 물리 NIC로 계속 나가야 하기 때문이다.

@@ -7,12 +7,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	serverListen    string
-	serverTun       string
-	serverTunListen string
-	serverCIDR      string
-)
+type serverOptions struct {
+	ListenAddr  string
+	TunName     string
+	TunAddrCIDR string
+}
+
+var serverOpts = serverOptions{}
 
 var serverCmd = &cobra.Command{
 	Use:   "server",
@@ -21,12 +22,12 @@ var serverCmd = &cobra.Command{
 		if verbose {
 			fmt.Println("[server] verbose enabled")
 		}
-		fmt.Printf("[server] init listen=%s tun=%s cidr=%s\n", serverListen, serverTun, serverCIDR)
+		fmt.Printf("[server] init listen=%s tun=%s cidr=%s\n", serverOpts.ListenAddr, serverOpts.TunName, serverOpts.TunAddrCIDR)
 
 		svr, err := server.New(server.ServerConfig{
-			Addr:         serverListen,
-			TunInterface: serverTun,
-			CIDR:         serverCIDR,
+			ListenAddr:  serverOpts.ListenAddr,
+			TunName:     serverOpts.TunName,
+			TunAddrCIDR: serverOpts.TunAddrCIDR,
 		})
 		if err != nil {
 			return err
@@ -41,7 +42,7 @@ var serverCmd = &cobra.Command{
 }
 
 func init() {
-	serverCmd.Flags().StringVar(&serverListen, "listen", "0.0.0.0:9010", "UDP listen address")
-	serverCmd.Flags().StringVar(&serverTun, "tun", "tun0", "TUN device name")
-	serverCmd.Flags().StringVar(&serverCIDR, "cidr", "10.77.0.1/24", "TUN interface CIDR (server)")
+	serverCmd.Flags().StringVar(&serverOpts.ListenAddr, "listen", "0.0.0.0:9010", "UDP listen address")
+	serverCmd.Flags().StringVar(&serverOpts.TunName, "tun", "tun0", "TUN device name")
+	serverCmd.Flags().StringVar(&serverOpts.TunAddrCIDR, "tun-cidr", "10.77.0.1/24", "TUN interface CIDR (server)")
 }

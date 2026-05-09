@@ -14,23 +14,46 @@ type Client struct {
 }
 
 type ClientConfig struct {
-	Addr       string
-	ServerAddr string
-	TunName    string
-	CIDR       string
+	ListenAddr      string
+	ServerEndpoint  string
+	TunName         string
+	TunAddrCIDR     string
+	ServerRouteCIDR string
+}
+
+func (c *ClientConfig) Normalize() error {
+	host, _, err := net.SplitHostPort(c.ServerEndpoint)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("invalid server endpoint host: %q", host)
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return fmt.Errorf("server endpoint host must be IPv4: %q", host)
+	}
+	c.ServerRouteCIDR = ip4.String() + "/32"
+
+	return nil
 }
 
 func New(cfg ClientConfig) (*Client, error) {
+	if err := cfg.Normalize(); err != nil {
+		return nil, err
+	}
+
 	return &Client{
 		cfg: cfg,
 	}, nil
 }
 
 func (c *Client) Run(ctx context.Context) error {
-	tun := tun.New(c.cfg.TunName, c.cfg.CIDR)
+	tun := tun.New(c.cfg.TunName, c.cfg.TunAddrCIDR)
 
 	route := vpn.NewRoute(vpn.RouteSpec{
-		ServerIP: c.cfg.ServerAddr,
+		ServerIP: c.cfg.ServerEndpoint,
 	})
 
 	manager := vpn.VpnManager{}
@@ -54,12 +77,12 @@ func (c *Client) Run(ctx context.Context) error {
 }
 
 func (c *Client) ListenUDP(ctx context.Context) (net.Addr, error) {
-	conn, err := net.ListenPacket("udp", c.cfg.Addr)
+	conn, err := net.ListenPacket("udp", c.cfg.ListenAddr)
 	if err != nil {
-		return nil, fmt.Errorf("binding to udp %s: %v", c.cfg.Addr, err)
+		return nil, fmt.Errorf("binding to udp %s: %v", c.cfg.ListenAddr, err)
 	}
 
-	serverAddr, err := net.ResolveUDPAddr("udp", c.cfg.ServerAddr)
+	serverAddr, err := net.ResolveUDPAddr("udp", c.cfg.ServerEndpoint)
 	if err != nil {
 		return nil, err
 	}

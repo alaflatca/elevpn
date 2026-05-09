@@ -7,13 +7,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	clientListen    string
-	clientServer    string
-	clientTun       string
-	clientTunListen string
-	clientCIDR      string
-)
+type clientOptions struct {
+	ListenAddr     string
+	ServerEndpoint string
+	TunName        string
+	TunAddrCIDR    string
+}
+
+var clientOpts = clientOptions{}
 
 var clientCmd = &cobra.Command{
 	Use:   "client",
@@ -22,13 +23,15 @@ var clientCmd = &cobra.Command{
 		if verbose {
 			fmt.Println("[client] verbose enabled")
 		}
-		fmt.Printf("[client] addr=%s server=%s tun=%s cidr=%s\n", clientListen, clientServer, clientTun, clientCIDR)
+		fmt.Printf("[client] listen=%s endpoint=%s tunName=%s tunCIDR=%s\n",
+			clientOpts.ListenAddr, clientOpts.ServerEndpoint, clientOpts.TunName, clientOpts.TunAddrCIDR,
+		)
 
 		cli, err := client.New(client.ClientConfig{
-			Addr:       clientListen,
-			ServerAddr: clientServer,
-			TunName:    clientTun,
-			CIDR:       clientCIDR,
+			ListenAddr:     clientOpts.ListenAddr,
+			ServerEndpoint: clientOpts.ServerEndpoint,
+			TunName:        clientOpts.TunName,
+			TunAddrCIDR:    clientOpts.TunAddrCIDR,
 		})
 		if err != nil {
 			return err
@@ -39,9 +42,9 @@ var clientCmd = &cobra.Command{
 }
 
 func init() {
-	clientCmd.Flags().StringVar(&clientListen, "listen", ":0", "elevpn local UDP address")
-	clientCmd.Flags().StringVar(&clientServer, "server", "0.0.0.0:9010", "elevpn server UDP address")
-	clientCmd.Flags().StringVar(&clientTun, "tun", "tun1", "TUN device name")
-	clientCmd.Flags().StringVar(&clientCIDR, "cidr", "10.77.0.2/32", "TUN interface CIDR (client)")
+	clientCmd.Flags().StringVar(&clientOpts.ListenAddr, "listen", ":0", "elevpn local UDP address")
+	clientCmd.Flags().StringVar(&clientOpts.ServerEndpoint, "server-endpoint", "0.0.0.0:9010", "elevpn endpoint UDP address")
+	clientCmd.Flags().StringVar(&clientOpts.TunName, "tun", "tun1", "TUN device name")
+	clientCmd.Flags().StringVar(&clientOpts.TunAddrCIDR, "tun-cidr", "10.77.0.2/32", "TUN interface CIDR (client)")
 	// _ = clientCmd.MarkFlagRequired("server")  로컬 테스트를 위해서 잠시 주석처리
 }

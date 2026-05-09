@@ -15,10 +15,10 @@ type Server struct {
 }
 
 type ServerConfig struct {
-	Addr         string
-	CIDR         string
+	ListenAddr   string
+	TunName      string
+	TunAddrCIDR  string
 	OutInterface string
-	TunInterface string
 }
 
 func New(cfg ServerConfig) (*Server, error) {
@@ -38,7 +38,7 @@ func (s *Server) Run(ctx context.Context) error {
 	log.Printf("external interface: %q", externalIfr)
 
 	// 한 묶음
-	tun := tun.New(s.cfg.TunInterface, s.cfg.CIDR)
+	tun := tun.New(s.cfg.TunName, s.cfg.TunAddrCIDR)
 	if err := manager.RegisterAndApply(tun); err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func (s *Server) Run(ctx context.Context) error {
 	masquerade := vpn.NewMasquerade(vpn.MasqueradeSpec{
 		TableName:    "vpnnat",
 		ChainName:    "postrouting",
-		SrcCIDR:      s.cfg.CIDR,
+		SrcCIDR:      s.cfg.TunAddrCIDR,
 		OutInterface: externalIfr,
 	})
 	if err := manager.RegisterAndApply(masquerade); err != nil {
@@ -69,9 +69,9 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) ListenUDP(ctx context.Context) (net.Addr, error) {
-	conn, err := net.ListenPacket("udp", s.cfg.Addr)
+	conn, err := net.ListenPacket("udp", s.cfg.ListenAddr)
 	if err != nil {
-		return nil, fmt.Errorf("binding to udp %s: %v", s.cfg.Addr, err)
+		return nil, fmt.Errorf("binding to udp %s: %v", s.cfg.ListenAddr, err)
 	}
 	go func() {
 		go func() {
