@@ -15,10 +15,10 @@ type Server struct {
 }
 
 type ServerConfig struct {
-	ListenAddr   string
-	TunName      string
-	TunAddrCIDR  string
-	OutInterface string
+	ListenAddr     string
+	TunName        string
+	TunAddrCIDR    string
+	VPNNetworkCIDR string
 }
 
 func New(cfg ServerConfig) (*Server, error) {
@@ -37,23 +37,18 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	log.Printf("external interface: %q", externalIfr)
 
-	// 한 묶음
-	tun := tun.New(s.cfg.TunName, s.cfg.TunAddrCIDR)
-	if err := manager.RegisterAndApply(tun); err != nil {
-		return err
+	components := []vpn.VpnComponent{
+		tun.New(s.cfg.TunName, s.cfg.TunAddrCIDR),
+		vpn.NewIPForward(),
+		vpn.NewMasquerade(vpn.MasqueradeSpec{
+			TableName:    "vpnnat",
+			ChainName:    "vpn-postrouting",
+			SrcCIDR:      s.cfg.VPNNetworkCIDR,
+			OutInterface: externalIfr,
+		}),
 	}
 
-	masquerade := vpn.NewMasquerade(vpn.MasqueradeSpec{
-		TableName:    "vpnnat",
-		ChainName:    "postrouting",
-		SrcCIDR:      s.cfg.TunAddrCIDR,
-		OutInterface: externalIfr,
-	})
-	if err := manager.RegisterAndApply(masquerade); err != nil {
-		return err
-	}
-
-	if err := vpn.EnableIPForward(); err != nil {
+	if err := manager.ApplyAll(components...); err != nil {
 		return err
 	}
 

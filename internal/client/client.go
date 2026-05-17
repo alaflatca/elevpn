@@ -50,17 +50,17 @@ func New(cfg ClientConfig) (*Client, error) {
 }
 
 func (c *Client) Run(ctx context.Context) error {
-	tun := tun.New(c.cfg.TunName, c.cfg.TunAddrCIDR)
-
-	route := vpn.NewRoute(vpn.RouteSpec{
-		ServerIP: c.cfg.ServerEndpoint,
-	})
-
 	manager := vpn.VpnManager{}
-	if err := manager.RegisterAndApply(tun); err != nil {
-		return err
+	defer manager.Teardown()
+
+	components := []vpn.VpnComponent{
+		tun.New(c.cfg.TunName, c.cfg.TunAddrCIDR),
+		vpn.NewRoute(vpn.RouteSpec{
+			ServerIP: c.cfg.ServerEndpoint,
+		}),
 	}
-	if err := manager.RegisterAndApply(route); err != nil {
+
+	if err := manager.ApplyAll(components...); err != nil {
 		return err
 	}
 

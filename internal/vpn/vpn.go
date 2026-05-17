@@ -4,7 +4,6 @@ import (
 	"elevpn/internal/netlink"
 	"fmt"
 	"log"
-	"os"
 )
 
 type VpnComponent interface {
@@ -17,19 +16,25 @@ type VpnManager struct {
 	components []VpnComponent
 }
 
-func (m *VpnManager) RegisterAndApply(c VpnComponent) error {
-	if err := c.Apply(); err != nil {
-		return fmt.Errorf("[%s] failed to apply: %v", c.Name(), err)
+func (m *VpnManager) ApplyAll(components ...VpnComponent) error {
+	for _, c := range components {
+		if err := c.Apply(); err != nil {
+			m.Teardown()
+			return fmt.Errorf("[%s] failed to apply: %v", c.Name(), err)
+		}
+
+		m.components = append(m.components, c)
 	}
 
-	m.components = append(m.components, c)
 	return nil
 }
 
 func (m *VpnManager) Teardown() {
-	for _, c := range m.components {
+	for i := len(m.components) - 1; i >= 0; i-- {
+		c := m.components[i]
+
 		if err := c.Cleanup(); err != nil {
-			log.Printf("[%s] %v ", c.Name(), err)
+			log.Printf("[%s] failed to cleanup: %v", c.Name(), err)
 		}
 	}
 }
@@ -40,8 +45,4 @@ func ExternalInterface() (string, error) {
 		return "", err
 	}
 	return externalIfr, nil
-}
-
-func EnableIPForward() error {
-	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0644)
 }
