@@ -1,26 +1,131 @@
-[Server]
-1.	table 생성
-nft add table ip vpnnat
+VPN 네트워크 설정 명령
+======================
 
-2.	postrouting nat chain 생성
-nft add chain ip vpnnat postrouting '{ type nat hook postrouting priority 100; }'
+이 문서는 elevpn이 Netlink로 적용하는 네트워크 설정을 ip, nft, sysctl
+명령으로 표현한 것이다.
 
-3.	masquerade rule 추가
-nft add rule ip vpnnat postrouting ip saddr 10.77.0.0/24 oifname "eth0" masquerade
+예시에서 사용하는 값
+---------------------
 
-이 세 개는 네 서버가 VPN 내부 대역에서 나온 패킷을 외부 NIC로 나갈 때 source NAT 하도록 만드는 작업이다. 
-nftables netlink spec도 newtable, newchain, newrule 같은 연산을 별도로 정의하고 있고, chain에는 hook/type, rule에는 expressions 가 들어간다. 
+VPN 대역          : 10.77.0.0/24
+nftables 테이블   : vpnnat
+nftables 체인     : vpn-postrouting
+<server_ip>       : VPN 서버의 공인 IPv4 주소
+<real_gateway>    : VPN 연결 전 기본 게이트웨이
+<real_nic>        : 인터넷에 연결된 실제 인터페이스
+<tun_nic>         : VPN TUN 인터페이스
 
 
-=====
+Server
+======
+
+서버는 TUN에서 받은 VPN 패킷을 외부 인터페이스로 전달하고, 출발지 주소를
+서버의 외부 주소로 변환해야 한다.
 
 
-[Client]
-1. VPN 서버 공인 IP로 가는 예외 route
-ip route add <endpoint>/32 via <real_gateway> dev <real_nic>
+1. IPv4 forwarding 활성화
+-------------------------
 
-2. default를 tun으로 변경하는 route
-ip route replace default dev <tun_nic>
+    sysctl -w net.ipv4.ip_forward=1
 
-이 두 개를 넣는 이유는, 일반 트래픽은 tun0로 모으고 싶지만 VPN 서버로 보내는 UDP 자체는 원래 물리 NIC로 계속 나가야 하기 때문이다.
-Linux routing은 더 구체적인 prefix를 우선 선택하므로 /32 host route가 default보다 먼저 잡힌다. default 는 fallback 경로다
+커널이 서로 다른 인터페이스 사이에서 IPv4 패킷을 전달할 수 있게 한다.
+elevpn은 /proc/sys/net/ipv4/ip_forward에 직접 1을 쓰고, 종료할 때 기존
+값을 복원한다.
+
+
+2. NAT 테이블 생성
+------------------
+
+    nft add table ip vpnnat
+
+
+3. postrouting NAT 체인 생성
+----------------------------
+
+    nft add chain ip vpnnat vpn-postrouting \
+      '{ type nat hook postrouting priority 100; }'
+
+postrouting hook은 패킷의 출력 경로가 결정된 뒤 실행된다.
+
+
+4. masquerade 규칙 추가
+-----------------------
+
+    nft add rule ip vpnnat vpn-postrouting \
+      ip saddr 10.77.0.0/24 oifname "<real_nic>" masquerade
+
+VPN 대역에서 출발해 외부 인터페이스로 나가는 패킷의 source IP를 서버의
+외부 IP로 변환한다.
+
+처리 흐름
+
+    VPN 패킷
+      -> TUN 인터페이스
+      -> IPv4 forwarding
+      -> postrouting hook
+      -> masquerade
+      -> 외부 인터페이스
+
+nftables Netlink에서는 위 설정을 NEWTABLE, NEWCHAIN, NEWRULE 요청으로
+나누어 전달한다. 체인 요청에는 hook과 type이, 규칙 요청에는 조건과 동작을
+나타내는 expressions가 들어간다.
+
+
+Client
+======
+
+클라이언트는 일반 트래픽을 TUN으로 보내되, VPN 서버와 통신하는 UDP 패킷은
+기존 물리 네트워크를 통해 계속 전송해야 한다.
+
+
+1. VPN 서버로 가는 예외 route 추가
+----------------------------------
+
+    ip route add <server_ip>/32 via <real_gateway> dev <real_nic>
+
+해석
+
+    VPN 서버의 실제 IP로 가는 패킷만은
+    기존 게이트웨이와 기존 인터페이스를 사용한다.
+
+
+2. default route를 TUN으로 변경
+-------------------------------
+
+    ip route replace default dev <tun_nic>
+
+Linux routing은 prefix가 더 구체적인 경로를 먼저 선택한다. 따라서 VPN
+서버의 /32 host route가 default route보다 우선하고, 그 외 트래픽은
+default route를 따라 TUN으로 들어간다.
+
+적용 순서도 중요하다. 서버 예외 route를 먼저 추가해야 default route를
+TUN으로 바꾼 직후에도 VPN 서버와의 연결이 끊기지 않는다.
+
+
+Route 명령 해석
+===============
+
+예시
+
+    ip route add 203.0.113.10/32 via 192.168.0.1 dev wlan0
+
+203.0.113.10/32   : 이 경로를 적용할 목적지 한 개
+via 192.168.0.1   : 패킷을 전달할 다음 게이트웨이
+dev wlan0         : 패킷을 내보낼 인터페이스
+
+전체 명령은 다음 의미다.
+
+    203.0.113.10으로 가는 패킷은
+    192.168.0.1 게이트웨이를 거쳐
+    wlan0 인터페이스로 내보낸다.
+
+via는 "~을 거쳐서", "~을 통해서"라는 의미로 읽으면 된다.
+
+
+Client route 복원
+=================
+
+VPN 종료 시에는 기존 default route를 복원한 뒤 서버 예외 route를 제거한다.
+
+    ip route replace default via <real_gateway> dev <real_nic>
+    ip route del <server_ip>/32 via <real_gateway> dev <real_nic>

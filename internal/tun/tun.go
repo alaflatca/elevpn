@@ -3,6 +3,7 @@
 package tun
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -74,6 +75,21 @@ func (t *Tun) create() error {
 	t.f = os.NewFile(uintptr(fd), "/dev/net/tun")
 
 	return nil
+}
+
+func (t *Tun) Write(b []byte) (int, error) {
+	if t == nil || t.f == nil {
+		return 0, errors.New("tun file is nil")
+	}
+
+	return t.f.Write(b)
+}
+func (t *Tun) Read(b []byte) (int, error) {
+	if t == nil || t.f == nil {
+		return 0, errors.New("tun file is nil")
+	}
+
+	return t.f.Read(b)
 }
 
 func (t *Tun) setIPv4CIDR(cidr string) error {

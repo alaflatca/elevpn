@@ -6,7 +6,6 @@ import (
 	"elevpn/internal/vpn"
 	"fmt"
 	"net"
-	"time"
 )
 
 type Client struct {
@@ -53,8 +52,10 @@ func (c *Client) Run(ctx context.Context) error {
 	manager := vpn.VpnManager{}
 	defer manager.Teardown()
 
+	tunDevice := tun.New(c.cfg.TunName, c.cfg.TunAddrCIDR)
+
 	components := []vpn.VpnComponent{
-		tun.New(c.cfg.TunName, c.cfg.TunAddrCIDR),
+		tunDevice,
 		vpn.NewRoute(vpn.RouteSpec{
 			ServerIP: c.cfg.ServerEndpoint,
 		}),
@@ -64,55 +65,38 @@ func (c *Client) Run(ctx context.Context) error {
 		return err
 	}
 
-	addr, err := c.ListenUDP(ctx)
+	conn, err := c.DialUDP(ctx)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("[client] network: %s, addr: %s\n", addr.Network(), addr.String())
+	go tunToUdp(ctx, tunDevice, conn)
+	go udpToTun(ctx, conn, tunDevice)
 
 	<-ctx.Done()
 
 	return nil
 }
 
-func (c *Client) ListenUDP(ctx context.Context) (net.Addr, error) {
-	conn, err := net.ListenPacket("udp", c.cfg.ListenAddr)
+func tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) {
+
+}
+func udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) {
+
+}
+
+func (c *Client) DialUDP(ctx context.Context) (*net.UDPConn, error) {
+	laddr, err := net.ResolveUDPAddr("udp", c.cfg.ListenAddr)
 	if err != nil {
-		return nil, fmt.Errorf("binding to udp %s: %v", c.cfg.ListenAddr, err)
+		return nil, fmt.Errorf("failed resolve laddr: %v", err)
 	}
-
-	serverAddr, err := net.ResolveUDPAddr("udp", c.cfg.ServerEndpoint)
+	raddr, err := net.ResolveUDPAddr("udp", c.cfg.ServerEndpoint)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed resolve raddr: %v", err)
 	}
-
-	fmt.Printf("[client] server addr: %s\n", serverAddr.String())
-
-	go func() {
-		go func() {
-			<-ctx.Done()
-			_ = conn.Close()
-		}()
-
-		for range 10 {
-			sendBuf := make([]byte, 0, 1024)
-			sendBuf = fmt.Appendf(sendBuf, "[%s] hello server!, i'm client ", time.Now().String())
-			_, err = conn.WriteTo(sendBuf, serverAddr)
-			if err != nil {
-				return
-			}
-
-			recvBuf := make([]byte, 1024)
-			n, svrAddr, err := conn.ReadFrom(recvBuf)
-			if err != nil {
-				return
-			}
-			fmt.Printf("[client] recv(%s) buf: %s\n", svrAddr.String(), string(recvBuf[:n]))
-
-			time.Sleep(3 * time.Second)
-		}
-	}()
-
-	return conn.LocalAddr(), nil
+	conn, err := net.DialUDP("udp", laddr, raddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial udp: %v", err)
+	}
+	return conn, nil
 }
