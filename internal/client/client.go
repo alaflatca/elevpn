@@ -79,10 +79,38 @@ func (c *Client) Run(ctx context.Context) error {
 }
 
 func tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) {
+	buf := make([]byte, 65535)
+	for {
+		n, err := tunDevice.Read(buf)
+		if err != nil {
 
+		}
+		if n != 0 && len(buf) > 0 {
+			_, err := conn.Write(buf[:n])
+			if err != nil {
+
+			}
+		}
+	}
 }
 func udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) {
+	buf := make([]byte, 65535)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
 
+		}
+
+		if n != 0 && len(buf) > 0 {
+			n, err := conn.Write(buf[:n])
+			if err != nil {
+
+			}
+			if n == 0 {
+
+			}
+		}
+	}
 }
 
 func (c *Client) DialUDP(ctx context.Context) (*net.UDPConn, error) {
