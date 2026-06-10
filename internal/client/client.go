@@ -6,6 +6,8 @@ import (
 	"elevpn/internal/vpn"
 	"fmt"
 	"net"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type Client struct {
@@ -70,19 +72,31 @@ func (c *Client) Run(ctx context.Context) error {
 		return err
 	}
 
-	go tunToUdp(ctx, tunDevice, conn)
-	go udpToTun(ctx, conn, tunDevice)
-
-	<-ctx.Done()
+	errGroup, errCtx := errgroup.WithContext(ctx)
+	errGroup.Go(func() error {
+		return tunToUdp(errCtx, tunDevice, conn)
+	})
+	errGroup.Go(func() error {
+		return udpToTun(errCtx, conn, tunDevice)
+	})
+	if err := errGroup.Wait(); err != nil {
+		return err
+	}
 
 	return nil
 }
 
-func tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) {
+func tunToUdp(c context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
+	ctx, cancel := context.WithCancel(c)
+	defer cancel()
+
 	buf := make([]byte, 65535)
 	for {
 		n, err := tunDevice.Read(buf)
 		if err != nil {
+			if c.Err() != nil {
+				return c.Err()
+			}
 
 		}
 		if n != 0 && len(buf) > 0 {
@@ -91,9 +105,16 @@ func tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) {
 
 			}
 		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			continue
+		}
 	}
 }
-func udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) {
+func udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error {
 	buf := make([]byte, 65535)
 	for {
 		n, err := conn.Read(buf)
