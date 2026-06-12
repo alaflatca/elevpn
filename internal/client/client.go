@@ -4,7 +4,9 @@ import (
 	"context"
 	"elevpn/internal/tun"
 	"elevpn/internal/vpn"
+	"errors"
 	"fmt"
+	"log"
 	"net"
 
 	"golang.org/x/sync/errgroup"
@@ -71,46 +73,61 @@ func (c *Client) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer conn.Close()
 
 	errGroup, errCtx := errgroup.WithContext(ctx)
+
+	context.AfterFunc(errCtx, func() {
+		if err := conn.Close(); err != nil {
+			log.Printf("failed to udp close: %v", err)
+		}
+		if err := tunDevice.Cleanup(); err != nil {
+			log.Printf("failed to tun close: %v", err)
+		}
+	})
+
 	errGroup.Go(func() error {
-		return tunToUdp(errCtx, tunDevice, conn)
+		if err := tunToUdp(errCtx, tunDevice, conn); err != nil {
+			return fmt.Errorf("failed to TUN To UDP: %v", err)
+		}
+		return nil
 	})
 	errGroup.Go(func() error {
-		return udpToTun(errCtx, conn, tunDevice)
+		if err := udpToTun(errCtx, conn, tunDevice); err != nil {
+			return fmt.Errorf("failed to UDP to TUN: %v", err)
+		}
+		return nil
 	})
-	if err := errGroup.Wait(); err != nil {
-		return err
+
+	err = errGroup.Wait()
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return nil
 	}
 
-	return nil
+	return err
 }
 
-func tunToUdp(c context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
-	ctx, cancel := context.WithCancel(c)
-	defer cancel()
-
+func tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
 	buf := make([]byte, 65535)
 	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		n, err := tunDevice.Read(buf)
 		if err != nil {
-			if c.Err() != nil {
-				return c.Err()
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-
+			return err
 		}
-		if n != 0 && len(buf) > 0 {
+		if n > 0 {
 			_, err := conn.Write(buf[:n])
 			if err != nil {
-
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
 			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			continue
 		}
 	}
 }
@@ -122,14 +139,12 @@ func udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error 
 
 		}
 
-		if n != 0 && len(buf) > 0 {
-			n, err := conn.Write(buf[:n])
+		if n > 0 {
+			m, err := conn.Write(buf[:n])
 			if err != nil {
 
 			}
-			if n == 0 {
 
-			}
 		}
 	}
 }
