@@ -123,6 +123,13 @@ func recvRoutesAck(fd int, want uint32) (string, error) {
 						log.Printf("found external interface : %+v", ifr) // 아직 정확히 external interface 를 찾은게 아님 따로 구별 하는 로직이있어야함 임시
 						return ifr.Name, nil
 					}
+					if attrType == unix.RTA_GATEWAY {
+						if len(attrValue) < 4 {
+							log.Printf("attr value is short: %v", len(attrValue))
+							continue
+						}
+						gateway := net.IP(attrValue).String()
+					}
 
 					pad := align4(int(attrLength))
 					pos += pad

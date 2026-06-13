@@ -10,6 +10,7 @@ import (
 type clientOptions struct {
 	ListenAddr     string
 	ServerEndpoint string
+	Gateway        string
 	TunName        string
 	TunAddrCIDR    string
 }
@@ -43,6 +44,7 @@ var clientCmd = &cobra.Command{
 
 func init() {
 	clientCmd.Flags().StringVar(&clientOpts.ListenAddr, "listen", ":0", "elevpn local UDP address")
+	clientCmd.Flags().StringVar(&clientOpts.Gateway, "gateway", "", "elevpn local gateway")
 	clientCmd.Flags().StringVar(&clientOpts.ServerEndpoint, "server-endpoint", "0.0.0.0:9010", "elevpn endpoint UDP address")
 	// server-route-ip 는 endpoint 에서 가져와서 처리하는걸로
 	// default gateway 값 필요함

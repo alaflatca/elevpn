@@ -6,6 +6,7 @@ import (
 	"elevpn/internal/vpn"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 
@@ -110,9 +111,6 @@ func (c *Client) Run(ctx context.Context) error {
 func tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
 	buf := make([]byte, 65535)
 	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 		n, err := tunDevice.Read(buf)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -121,30 +119,41 @@ func tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error 
 			return err
 		}
 		if n > 0 {
-			_, err := conn.Write(buf[:n])
+			written, err := conn.Write(buf[:n])
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
 				return err
 			}
+			if written != n {
+				return io.ErrShortWrite
+			}
 		}
 	}
 }
+
 func udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error {
 	buf := make([]byte, 65535)
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
-
-		}
-
-		if n > 0 {
-			m, err := conn.Write(buf[:n])
-			if err != nil {
-
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-
+			return err
+		}
+		if n > 0 {
+			written, err := tunDevice.Write(buf[:n])
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			if written != n {
+				return io.ErrShortWrite
+			}
 		}
 	}
 }
