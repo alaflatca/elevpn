@@ -39,10 +39,10 @@ func (m *VpnManager) Teardown() {
 	}
 }
 
-func ExternalInterface() (string, error) {
-	externalIfr, err := netlink.GetDefaultExternalInterface()
+func ExternalInterface() (netlink.DefaultRoute, error) {
+	externalIfr, err := netlink.GetDefaultRoute()
 	if err != nil {
-		return "", err
+		return netlink.DefaultRoute{}, err
 	}
 	return externalIfr, nil
 }

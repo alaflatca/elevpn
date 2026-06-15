@@ -77,7 +77,7 @@ B. type = 24, Route Payload 구조로 읽어야됨
     [scope      (1 byte)]
     [type       (1 byte)]
     [flags      (4 byte)]
- Attributes
+C. Attributes
     [Attr Length (2 bytes)]
     [Attr Type   (2 bytes)]
     [Value       (가변)]

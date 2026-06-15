@@ -9,44 +9,52 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func GetDefaultExternalInterface() (string, error) {
+type DefaultRoute struct {
+	Gateway        net.IP
+	InterfaceName  string
+	InterfaceIndex int
+}
+
+func GetDefaultRoute() (DefaultRoute, error) {
 	fd, err := openNetlink(unix.NETLINK_ROUTE)
 	if err != nil {
-		return "", err
+		return DefaultRoute{}, err
 	}
 	defer unix.Close(fd)
 
-	externalInterface, err := getDefaultExternalInterface(fd)
+	defaultRoute, err := getDefaultRoute(fd)
 	if err != nil {
-		return "", err
+		return DefaultRoute{}, err
 	}
 
-	return externalInterface, nil
+	return defaultRoute, nil
 }
 
-func getDefaultExternalInterface(fd int) (string, error) {
+func getDefaultRoute(fd int) (DefaultRoute, error) {
 	rtmsg := newBaseRtmsg()
 	header := rtgen(rtmsg)
 	packet := nlMsg(1, unix.RTM_GETROUTE, unix.NLM_F_REQUEST|unix.NLM_F_DUMP, header)
 
 	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return "", err
+		return DefaultRoute{}, err
 	}
 
-	ifr, err := recvRoutesAck(fd, 1)
+	defRoute, err := recvDefaultRoute(fd, 1)
 	if err != nil {
-		return "", err
+		return DefaultRoute{}, err
 	}
 
-	return ifr, nil
+	return defRoute, nil
 }
 
 // unix.NLM_F_DUMP 플래그는 커널에서 "경로가 너무 많으니 여러 번 나눠서 보냄"
 // 마지막에 Type = 3 (NLMSG_DONE)  메세지를 하나 보냄
-func recvRoutesAck(fd int, want uint32) (string, error) {
+func recvDefaultRoute(fd int, want uint32) (DefaultRoute, error) {
 	if err := setSocketTimeout(fd, 1); err != nil {
-		return "", err
+		return DefaultRoute{}, err
 	}
+
+	defRoute := &DefaultRoute{}
 
 	buf := make([]byte, 64*1024)
 	for {
@@ -57,12 +65,12 @@ func recvRoutesAck(fd int, want uint32) (string, error) {
 			}
 			// EAGAIN = Error AGAIN
 			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
-				return "", fmt.Errorf("netlink response timeout: 커널 응답이 업습니다.")
+				return DefaultRoute{}, fmt.Errorf("netlink response timeout: 커널 응답이 업습니다.")
 			}
 			if err == unix.ENOBUFS {
-				return "", fmt.Errorf("netlink receive buffer overflow: 데이터 유실가능성")
+				return DefaultRoute{}, fmt.Errorf("netlink receive buffer overflow: 데이터 유실가능성")
 			}
-			return "", fmt.Errorf("recvfrom fatal error: %w", err)
+			return DefaultRoute{}, fmt.Errorf("recvfrom fatal error: %w", err)
 		}
 
 		// 최소한 넷링크 헤더(16)는 읽을 수 있는 길이어야함
@@ -84,9 +92,9 @@ func recvRoutesAck(fd int, want uint32) (string, error) {
 
 			switch msgType {
 			case unix.NLMSG_DONE: // NLM_F_DUMP ---> NLMSG_DONE(끝났음을 의미)
-				return "", fmt.Errorf("default external interface not found in routing table ")
+				return DefaultRoute{}, fmt.Errorf("default external interface not found in routing table ")
 			case unix.NLMSG_ERROR:
-				return "", fmt.Errorf("nlmsg error: %v", msgType)
+				return DefaultRoute{}, fmt.Errorf("nlmsg error: %v", msgType)
 			case 24:
 				endPos := pos + int(msgLength)
 
@@ -121,14 +129,18 @@ func recvRoutesAck(fd int, want uint32) (string, error) {
 							continue
 						}
 						log.Printf("found external interface : %+v", ifr) // 아직 정확히 external interface 를 찾은게 아님 따로 구별 하는 로직이있어야함 임시
-						return ifr.Name, nil
+
+						defRoute.InterfaceIndex = ifr.Index
+						defRoute.InterfaceName = ifr.Name
+						continue
 					}
 					if attrType == unix.RTA_GATEWAY {
 						if len(attrValue) < 4 {
 							log.Printf("attr value is short: %v", len(attrValue))
 							continue
 						}
-						gateway := net.IP(attrValue).String()
+						defRoute.Gateway = net.IP(attrValue)
+						continue
 					}
 
 					pad := align4(int(attrLength))
