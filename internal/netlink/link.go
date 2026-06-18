@@ -49,12 +49,13 @@ func getDefaultRoute(fd int) (DefaultRoute, error) {
 
 // unix.NLM_F_DUMP 플래그는 커널에서 "경로가 너무 많으니 여러 번 나눠서 보냄"
 // 마지막에 Type = 3 (NLMSG_DONE)  메세지를 하나 보냄
+// [netlink header][route, x header][attr][attr][attr]
 func recvDefaultRoute(fd int, want uint32) (DefaultRoute, error) {
 	if err := setSocketTimeout(fd, 1); err != nil {
 		return DefaultRoute{}, err
 	}
 
-	defRoute := &DefaultRoute{}
+	defaultRoute := &DefaultRoute{}
 
 	buf := make([]byte, 64*1024)
 	for {
@@ -92,7 +93,16 @@ func recvDefaultRoute(fd int, want uint32) (DefaultRoute, error) {
 
 			switch msgType {
 			case unix.NLMSG_DONE: // NLM_F_DUMP ---> NLMSG_DONE(끝났음을 의미)
-				return DefaultRoute{}, fmt.Errorf("default external interface not found in routing table ")
+				if defaultRoute.InterfaceIndex == 0 {
+					return DefaultRoute{}, fmt.Errorf("default external interface not found in routing table 'index'")
+				}
+				if defaultRoute.InterfaceName == "" {
+					return DefaultRoute{}, fmt.Errorf("default external interface not found in routing table 'name'")
+				}
+				if len(defaultRoute.Gateway) < 4 {
+					return DefaultRoute{}, fmt.Errorf("default external interface not found in routing table 'gateway'")
+				}
+				return *defaultRoute, nil
 			case unix.NLMSG_ERROR:
 				return DefaultRoute{}, fmt.Errorf("nlmsg error: %v", msgType)
 			case 24:
@@ -106,8 +116,8 @@ func recvDefaultRoute(fd int, want uint32) (DefaultRoute, error) {
 					break
 				}
 
-				pos += 28 //   Route Header 패스
-				for pos+4 <= endPos {
+				pos += 28             //   Route Header 패스
+				for pos+4 <= endPos { // attr 검사
 					attrLength := binary.NativeEndian.Uint16(buf[pos : pos+2])
 					attrType := binary.NativeEndian.Uint16(buf[pos+2 : pos+4])
 
@@ -130,17 +140,15 @@ func recvDefaultRoute(fd int, want uint32) (DefaultRoute, error) {
 						}
 						log.Printf("found external interface : %+v", ifr) // 아직 정확히 external interface 를 찾은게 아님 따로 구별 하는 로직이있어야함 임시
 
-						defRoute.InterfaceIndex = ifr.Index
-						defRoute.InterfaceName = ifr.Name
-						continue
+						defaultRoute.InterfaceIndex = ifr.Index
+						defaultRoute.InterfaceName = ifr.Name
 					}
 					if attrType == unix.RTA_GATEWAY {
 						if len(attrValue) < 4 {
 							log.Printf("attr value is short: %v", len(attrValue))
 							continue
 						}
-						defRoute.Gateway = net.IP(attrValue)
-						continue
+						defaultRoute.Gateway = net.IP(attrValue)
 					}
 
 					pad := align4(int(attrLength))

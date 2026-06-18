@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"elevpn/internal/netlink"
 	"elevpn/internal/tun"
 	"elevpn/internal/vpn"
 	"fmt"
@@ -31,11 +32,11 @@ func (s *Server) Run(ctx context.Context) error {
 	manager := vpn.VpnManager{}
 	defer manager.Teardown()
 
-	externalIfr, err := vpn.ExternalInterface()
+	routeInfo, err := netlink.GetDefaultRoute()
 	if err != nil {
 		return err
 	}
-	log.Printf("external interface: %q", externalIfr)
+	log.Printf("default route info, index: %d, name: %q, gateway: %q\n", routeInfo.InterfaceIndex, routeInfo.InterfaceName, routeInfo.Gateway.String())
 
 	components := []vpn.VpnComponent{
 		tun.New(s.cfg.TunName, s.cfg.TunAddrCIDR),
@@ -44,7 +45,7 @@ func (s *Server) Run(ctx context.Context) error {
 			TableName:    "vpnnat",
 			ChainName:    "vpn-postrouting",
 			SrcCIDR:      s.cfg.VPNNetworkCIDR,
-			OutInterface: externalIfr,
+			OutInterface: routeInfo.InterfaceName,
 		}),
 	}
 

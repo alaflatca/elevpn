@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"elevpn/internal/netlink"
 	"elevpn/internal/tun"
 	"elevpn/internal/vpn"
 	"errors"
@@ -57,12 +58,21 @@ func (c *Client) Run(ctx context.Context) error {
 	manager := vpn.VpnManager{}
 	defer manager.Teardown()
 
+	routeInfo, err := netlink.GetDefaultRoute()
+	if err != nil {
+		return err
+	}
+	log.Printf("default route info, index: %d, name: %q, gateway: %q\n", routeInfo.InterfaceIndex, routeInfo.InterfaceName, routeInfo.Gateway.String())
+
 	tunDevice := tun.New(c.cfg.TunName, c.cfg.TunAddrCIDR)
 
 	components := []vpn.VpnComponent{
 		tunDevice,
 		vpn.NewRoute(vpn.RouteSpec{
-			ServerIP: c.cfg.ServerEndpoint,
+			ServerIP:    c.cfg.ServerEndpoint,
+			Gateway:     routeInfo.Gateway.String(),
+			RealOIFName: routeInfo.InterfaceName,
+			TunOIFName:  c.cfg.TunName,
 		}),
 	}
 
