@@ -8,95 +8,94 @@ import (
 )
 
 type RouteSpec struct {
-	ServerIP    string
-	Gateway     string
-	RealOIFName string
-	TunOIFName  string
+	ServerRouteIP        string
+	Gateway              string
+	GatewayInterfaceName string
+	TunnelInterfaceName  string
 }
 
 type Route struct {
-	spec         RouteSpec
-	oldDefaultGw string
+	serverIP            net.IP
+	serverRouteIP       net.IP
+	gateway             net.IP
+	gatewayInterfaceIdx int
+	tunnelInterfaceIdx  int
 }
 
 func NewRoute(spec RouteSpec) *Route {
-	return &Route{spec: spec}
+	r := &Route{}
+	r.Normalize(spec)
+	return r
 }
 
 func (r *Route) Name() string {
 	return "Route"
 }
 
-func (r *Route) Apply() error {
-	return SetRoute(r.spec)
-}
-
-func (r *Route) Cleanup() error {
-	ip4 := net.ParseIP(r.spec.ServerIP).To4()
-	gateway := net.ParseIP(r.spec.Gateway).To4()
-	if ip4 == nil || gateway == nil {
-		return fmt.Errorf("only IPv4 is supported")
-	}
-
-	ifa, err := net.InterfaceByName(r.spec.RealOIFName)
-	if err != nil {
-		return err
-	}
-
-	if err := netlink.RestoreDefaultRoute(gateway, ifa.Index); err != nil {
-		return err
-	}
-
-	if err := netlink.DelHostRoute(ip4, gateway, ifa.Index); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func SetRoute(spec RouteSpec) error {
-	if spec.ServerIP == "" {
+func (r *Route) Normalize(spec RouteSpec) error {
+	if spec.ServerRouteIP == "" {
 		return errors.New("server ip is empty")
 	}
 	if spec.Gateway == "" {
 		return errors.New("gateway is empty")
 	}
-	if spec.RealOIFName == "" {
+	if spec.GatewayInterfaceName == "" {
 		return errors.New("real oif name is empty")
 	}
-	if spec.TunOIFName == "" {
+	if spec.TunnelInterfaceName == "" {
 		return errors.New("tun oif name is empty")
 	}
 
-	ip4 := net.ParseIP(spec.ServerIP).To4()
-	gateway := net.ParseIP(spec.Gateway).To4()
-	if ip4 == nil || gateway == nil {
+	serverIP, _, err := net.SplitHostPort(spec.ServerRouteIP)
+	if err != nil {
+		return fmt.Errorf("failed to split host, port: %v", err)
+	}
+
+	r.serverIP = net.ParseIP(serverIP).To4()
+	r.serverRouteIP = net.ParseIP(spec.ServerRouteIP).To4()
+	r.gateway = net.ParseIP(spec.Gateway).To4()
+
+	if r.serverIP == nil || r.serverRouteIP == nil || r.gateway == nil {
 		return fmt.Errorf("only IPv4 is supported")
 	}
 
-	ifa, err := net.InterfaceByName(spec.RealOIFName)
+	gatewayIfa, err := net.InterfaceByName(spec.GatewayInterfaceName)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to interface by name(%q): %v", spec.GatewayInterfaceName, err)
 	}
-	if ifa.Index < 0 {
-		return fmt.Errorf("invalid %q interface index", spec.RealOIFName)
+	if gatewayIfa.Index < 0 {
+		return fmt.Errorf("invalid %q interface index", spec.GatewayInterfaceName)
 	}
+	r.gatewayInterfaceIdx = gatewayIfa.Index
 
-	tunIfa, err := net.InterfaceByName(spec.TunOIFName)
+	tunnelIfa, err := net.InterfaceByName(spec.TunnelInterfaceName)
 	if err != nil {
+		return fmt.Errorf("failed to interface by name(%q): %v", spec.TunnelInterfaceName, err)
+	}
+	if tunnelIfa.Index < 0 {
+		return fmt.Errorf("invalid %q interface index", spec.TunnelInterfaceName)
+	}
+	r.tunnelInterfaceIdx = tunnelIfa.Index
+
+	return nil
+}
+
+func (r *Route) Cleanup() error {
+	if err := netlink.RestoreDefaultRoute(r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
 	}
-	if tunIfa.Index < 0 {
-		return fmt.Errorf("invalid %q interface index", spec.TunOIFName)
-	}
-
-	if err := netlink.AddHostRoute(ip4, gateway, ifa.Index); err != nil {
+	if err := netlink.DelHostRoute(r.serverIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
 	}
+	return nil
+}
 
-	if err := netlink.ReplaceDefaultRoute(tunIfa.Index); err != nil {
+func (r *Route) Apply() error {
+	if err := netlink.AddHostRoute(r.serverIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
 	}
-
+	if err := netlink.ReplaceDefaultRoute(r.tunnelInterfaceIdx); err != nil {
+		return err
+	}
 	return nil
 }

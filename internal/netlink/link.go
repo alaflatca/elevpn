@@ -26,6 +26,7 @@ func GetDefaultRoute() (DefaultRoute, error) {
 	if err != nil {
 		return DefaultRoute{}, err
 	}
+	fmt.Printf("[server] default route info\n index: %d\n name: %q\n gateway: %q\n", defaultRoute.InterfaceIndex, defaultRoute.InterfaceName, defaultRoute.Gateway.String())
 
 	return defaultRoute, nil
 }

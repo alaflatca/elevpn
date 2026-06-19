@@ -24,7 +24,7 @@ var clientCmd = &cobra.Command{
 		if verbose {
 			fmt.Println("[client] verbose enabled")
 		}
-		fmt.Printf("[client] listen=%s endpoint=%s tunName=%s tunCIDR=%s\n",
+		fmt.Printf("[client] init\n listen=%s\n endpoint=%s\n tunName=%s\n tunCIDR=%s\n\n",
 			clientOpts.ListenAddr, clientOpts.ServerEndpoint, clientOpts.TunName, clientOpts.TunAddrCIDR,
 		)
 

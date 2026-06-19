@@ -23,7 +23,7 @@ var serverCmd = &cobra.Command{
 		if verbose {
 			fmt.Println("[server] verbose enabled")
 		}
-		fmt.Printf("[server] init listen=%s tun-name=%s tun-addr-cidr=%s vpn-network-cidr=%s\n", serverOpts.ListenAddr, serverOpts.TunName, serverOpts.TunAddrCIDR, serverOpts.VPNNetworkCIDR)
+		fmt.Printf("[server] init\n listen=%s\n tun-name=%s\n tun-addr-cidr=%s\n vpn-network-cidr=%s\n\n", serverOpts.ListenAddr, serverOpts.TunName, serverOpts.TunAddrCIDR, serverOpts.VPNNetworkCIDR)
 
 		svr, err := server.New(server.ServerConfig{
 			ListenAddr:     serverOpts.ListenAddr,

@@ -36,7 +36,6 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("default route info, index: %d, name: %q, gateway: %q\n", routeInfo.InterfaceIndex, routeInfo.InterfaceName, routeInfo.Gateway.String())
 
 	components := []vpn.VpnComponent{
 		tun.New(s.cfg.TunName, s.cfg.TunAddrCIDR),
