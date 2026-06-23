@@ -20,9 +20,20 @@ type Tun struct {
 	f *os.File
 }
 
-func New(name string, cidr string) *Tun {
-	return &Tun{name: name, cidr: cidr}
+func New(name string, cidr string) (*Tun, error) {
+	if name == "" {
+		return nil, fmt.Errorf("tun name is empty")
+	}
+	ip, _, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse cidr(%q): %v", cidr, err)
+	}
+	if ip.To4() == nil {
+		return nil, fmt.Errorf("tun cidr must be IPv4: %q", cidr)
+	}
+	return &Tun{name: name, cidr: cidr}, nil
 }
+
 func (t *Tun) Apply() error {
 	if err := t.create(); err != nil {
 		return err
@@ -32,7 +43,7 @@ func (t *Tun) Apply() error {
 		return err
 	}
 
-	if err := t.setUp(); err != nil {
+	if err := t.up(); err != nil {
 		return err
 	}
 
@@ -75,21 +86,6 @@ func (t *Tun) create() error {
 	t.f = os.NewFile(uintptr(fd), "/dev/net/tun")
 
 	return nil
-}
-
-func (t *Tun) Write(b []byte) (int, error) {
-	if t == nil || t.f == nil {
-		return 0, errors.New("tun file is nil")
-	}
-
-	return t.f.Write(b)
-}
-func (t *Tun) Read(b []byte) (int, error) {
-	if t == nil || t.f == nil {
-		return 0, errors.New("tun file is nil")
-	}
-
-	return t.f.Read(b)
 }
 
 func (t *Tun) setIPv4CIDR(cidr string) error {
@@ -145,7 +141,7 @@ func (t *Tun) setIPv4CIDR(cidr string) error {
 	return nil
 }
 
-func (t *Tun) setUp() error {
+func (t *Tun) up() error {
 	if t == nil || t.f == nil {
 		return fmt.Errorf("nil device")
 	}
@@ -173,4 +169,20 @@ func (t *Tun) setUp() error {
 	}
 
 	return nil
+}
+
+func (t *Tun) Write(b []byte) (int, error) {
+	if t == nil || t.f == nil {
+		return 0, errors.New("tun file is nil")
+	}
+
+	return t.f.Write(b)
+}
+
+func (t *Tun) Read(b []byte) (int, error) {
+	if t == nil || t.f == nil {
+		return 0, errors.New("tun file is nil")
+	}
+
+	return t.f.Read(b)
 }

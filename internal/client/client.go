@@ -21,6 +21,7 @@ type Client struct {
 type ClientConfig struct {
 	ListenAddr      string
 	ServerEndpoint  string
+	ServerRouteIP   string
 	TunName         string
 	TunAddrCIDR     string
 	ServerRouteCIDR string
@@ -31,11 +32,9 @@ func (c *ClientConfig) Normalize() error {
 	if err != nil {
 		return fmt.Errorf("failed to split host:port: %v", err)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return fmt.Errorf("invalid server endpoint host: %v", host)
-	}
-	ip4 := ip.To4()
+	c.ServerRouteIP = host
+
+	ip4 := net.ParseIP(host).To4()
 	if ip4 == nil {
 		return fmt.Errorf("server endpoint host must be IPv4: %v", host)
 	}
@@ -49,31 +48,36 @@ func New(cfg ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
-	return &Client{
-		cfg: cfg,
-	}, nil
+	return &Client{cfg: cfg}, nil
 }
 
 func (c *Client) Run(ctx context.Context) error {
-	manager := vpn.VpnManager{}
-	defer manager.Teardown()
-
 	routeInfo, err := netlink.GetDefaultRoute()
 	if err != nil {
 		return err
 	}
 
-	tunDevice := tun.New(c.cfg.TunName, c.cfg.TunAddrCIDR)
+	tunDevice, err := tun.New(c.cfg.TunName, c.cfg.TunAddrCIDR)
+	if err != nil {
+		return err
+	}
+
+	route, err := vpn.NewRoute(vpn.RouteSpec{
+		ServerRouteIP:        c.cfg.ServerRouteIP,
+		Gateway:              routeInfo.Gateway.String(),
+		GatewayInterfaceName: routeInfo.InterfaceName,
+		TunnelInterfaceName:  c.cfg.TunName,
+	})
+	if err != nil {
+		return err
+	}
+
+	manager := vpn.VpnManager{}
+	defer manager.Teardown()
 
 	components := []vpn.VpnComponent{
 		tunDevice,
-		vpn.NewRoute(vpn.RouteSpec{
-			ServerRouteIP:        c.cfg.ServerEndpoint,
-			Gateway:              routeInfo.Gateway.String(),
-			GatewayInterfaceName: routeInfo.InterfaceName,
-			TunnelInterfaceName:  c.cfg.TunName,
-		},
-		),
+		route,
 	}
 
 	if err := manager.ApplyAll(components...); err != nil {
