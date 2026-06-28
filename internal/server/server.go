@@ -23,22 +23,27 @@ type ServerConfig struct {
 }
 
 func New(cfg ServerConfig) (*Server, error) {
-	return &Server{
-		cfg: cfg,
-	}, nil
+	return &Server{cfg: cfg}, nil
+}
+
+func (s *Server) normalize() error {
+	return nil
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	manager := vpn.VpnManager{}
-	defer manager.Teardown()
 
 	routeInfo, err := netlink.GetDefaultRoute()
 	if err != nil {
 		return err
 	}
 
+	tunDevice, err := tun.New(s.cfg.TunName, s.cfg.TunAddrCIDR)
+	if err != nil {
+		return err
+	}
+
 	components := []vpn.VpnComponent{
-		tun.New(s.cfg.TunName, s.cfg.TunAddrCIDR),
+		tunDevice,
 		vpn.NewIPForward(),
 		vpn.NewMasquerade(vpn.MasqueradeSpec{
 			TableName:    "vpnnat",
@@ -47,6 +52,9 @@ func (s *Server) Run(ctx context.Context) error {
 			OutInterface: routeInfo.InterfaceName,
 		}),
 	}
+
+	manager := vpn.VpnManager{}
+	defer manager.Teardown()
 
 	if err := manager.ApplyAll(components...); err != nil {
 		return err

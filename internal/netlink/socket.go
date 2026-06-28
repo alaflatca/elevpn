@@ -8,87 +8,9 @@ import (
 )
 
 const (
-	// nfnetlink / nftables
-	nfnlSubsysNftables = 10
-	nfnlMsgBatchBegin  = unix.NLMSG_MIN_TYPE
-	nfnlMsgBatchEnd    = unix.NLMSG_MIN_TYPE + 1
-	nfnlVersion        = 0
+	nfnlVersion = 0
 
-	// family / hook / priority
-	nfprotoIPv4       = 2   // NFPROTO_IPV4
-	nfInetPostRouting = 4   // NF_INET_POST_ROUTING
-	nfIPPriNatSrc     = 100 // NF_IP_PRI_NAT_SRC
-
-	// nft message types
-	nftMsgNewTable = 0
-	nftMsgDelTable = 2
-	nftMsgNewChain = 3
-	nftMsgNewRule  = 6
-
-	// table attrs
-	nftaTableName = 1
-
-	// chain attrs
-	nftaChainTable = 1
-	nftaChainName  = 3
-	nftaChainHook  = 4
-	nftaChainType  = 7
-
-	// hook attrs
-	nftaHookHooknum  = 1
-	nftaHookPriority = 2
-
-	// rule attrs
-	nftaRuleTable       = 1
-	nftaRuleChain       = 2
-	nftaRuleExpressions = 4
-
-	// expr list / expr attrs
-	nftaListElem = 1
-	nftaExprName = 1
-	nftaExprData = 2
-
-	// data attrs
-	nftaDataValue = 1
-
-	// payload expr attrs
-	nftaPayloadDreg   = 1
-	nftaPayloadBase   = 2
-	nftaPayloadOffset = 3
-	nftaPayloadLen    = 4
-
-	// bitwise expr attrs
-	nftaBitwiseSreg = 1
-	nftaBitwiseDreg = 2
-	nftaBitwiseLen  = 3
-	nftaBitwiseMask = 4
-	nftaBitwiseXor  = 5
-	nftaBitwiseOp   = 6
-
-	// cmp expr attrs
-	nftaCmpSreg = 1
-	nftaCmpOp   = 2
-	nftaCmpData = 3
-
-	// meta expr attrs
-	nftaMetaDreg = 1
-	nftaMetaKey  = 2
-
-	// registers
-	nftReg1 = 1
-	nftReg2 = 2
-
-	// payload base
-	nftPayloadNetworkHeader = 1
-
-	// bitwise / cmp ops
-	nftBitwiseBool = 0
-	nftCmpEq       = 0
-
-	// meta key
-	nftMetaOifname = 7
-
-	nlaFNested = 1 << 15
+	nftaBitwiseOp = 6
 )
 
 func openNetlink(proto int) (int, error) {
@@ -189,7 +111,7 @@ func recvAcks(fd int, want ...uint32) error {
 // 4. [New Rule]	Netlink Hdr + NetFilter Hdr + Rule  Attributes (Payload)
 // 5. [Batch End] 	Netlink Hdr + NetFilter Hdr
 func batchMsg(seq uint32, msgType uint16) []byte {
-	body := nfgen(unix.AF_UNSPEC, nfnlSubsysNftables)
+	body := nfgen(unix.AF_UNSPEC, unix.NFNL_SUBSYS_NFTABLES)
 	return nlMsg(seq, msgType, unix.NLM_F_REQUEST, body)
 }
 
@@ -206,18 +128,18 @@ func batchMsg(seq uint32, msgType uint16) []byte {
 func nfgen(family byte, resID uint16) []byte {
 	b := make([]byte, 4)
 	b[0] = family
-	b[1] = nfnlVersion
+	b[1] = 0 // nfgenmsg version
 	binary.BigEndian.PutUint16(b[2:4], resID)
 	return b
 }
 
-// Netlink Header
-// [ Length (4 byte)]
-// [ Type 	(2 byte)]
-// [ Flags	(2 byte)]
+// Netlink Header (16 + Payload)
+// [ Length		(4 byte)]
+// [ Type 		(2 byte)]
+// [ Flags		(2 byte)]
 // [ Sequence	(4 byte)]
-// [ Port ID (4 byte)]
-// [ Payload (가변 길이)]
+// [ Port ID 	(4 byte)]
+// [ Payload 	(가변 길이)]
 
 // 역할: 공통 Netlink 헤더를 붙여 최종적인 **'전송 가능한 패킷'**을 완성합니다.
 // seq: 일련번호입니다. 내가 보낸 요청과 커널의 응답을 매칭할 때 씁니다.
@@ -225,13 +147,15 @@ func nfgen(family byte, resID uint16) []byte {
 // flags: 요청(REQUEST)이며 응답(ACK)을 꼭 달라는 옵션을 설정합니다.
 // body: 위에서 만든 nfgen 데이터가 이 몸체(Body)로 들어갑니다.
 func nlMsg(seq uint32, msgType uint16, flags uint16, payload []byte) []byte {
-	h := make([]byte, unix.NLMSG_HDRLEN)
+	h := make([]byte, unix.NLMSG_HDRLEN+len(payload))
 	binary.NativeEndian.PutUint32(h[0:4], uint32(unix.NLMSG_HDRLEN+len(payload)))
 	binary.NativeEndian.PutUint16(h[4:6], msgType)
 	binary.NativeEndian.PutUint16(h[6:8], flags)
 	binary.NativeEndian.PutUint32(h[8:12], seq)
 	binary.NativeEndian.PutUint32(h[12:16], 0)
-	return append(h, payload...)
+	copy(h[unix.NLMSG_HDRLEN:], payload)
+
+	return h
 }
 
 // Netlink가 데이터를 담는 방식 TLV (TYPE-LENGTH-VALUE)
@@ -251,23 +175,36 @@ func putAttr(buf []byte, typ uint16, payload []byte) []byte {
 	buf = append(buf, payload...)
 
 	pad := align4(length) - length
-	if pad > 0 {
+	if pad > 0 { // 패딩이 0보다 크다는건 길이가 4의 배수가 아니기 때문에, pad 길이만큼 패딩 필요
 		buf = append(buf, make([]byte, pad)...)
 	}
 
 	return buf
 }
 
+/* Attr과 NestAttr의 구조 (버퍼에 순차적으로 나열되어있음,attr 구조로)
+d = []byte[
+  Attr(length, type, payload, padding),
+  NestAttr(lengh, type|nested, payload(type:data_value, payload:Attr),padding)
+  NestAttr(...)
+  Attr,
+]
+*/
+
 func putNestAttr(buf []byte, typ uint16, nested []byte) []byte {
-	return putAttr(buf, typ|nlaFNested, nested)
+	return putAttr(buf, typ|unix.NLA_F_NESTED, nested)
 }
 
 func dataValue(v []byte) []byte {
 	var b []byte
-	b = putAttr(b, nftaDataValue, v)
+	b = putAttr(b, unix.NFTA_DATA_VALUE, v)
 	return b
 }
 
+// 매개변수 n을 4의 배수로 조정하는 함수
+// 4의 배수라면 아무 변화없이 리턴
+// 4의 배수가 아니라면 4의 배수로 올림 (9 -> 12)
+// 1001(9) --> 1100(12, n+3) --> 1100(12, &^3)
 func align4(n int) int {
 	return (n + 3) &^ 3
 }

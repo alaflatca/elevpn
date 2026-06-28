@@ -27,7 +27,7 @@ type ClientConfig struct {
 	ServerRouteCIDR string
 }
 
-func (c *ClientConfig) Normalize() error {
+func (c *ClientConfig) normalize() error {
 	host, _, err := net.SplitHostPort(c.ServerEndpoint)
 	if err != nil {
 		return fmt.Errorf("failed to split host:port: %v", err)
@@ -44,7 +44,7 @@ func (c *ClientConfig) Normalize() error {
 }
 
 func New(cfg ClientConfig) (*Client, error) {
-	if err := cfg.Normalize(); err != nil {
+	if err := cfg.normalize(); err != nil {
 		return nil, err
 	}
 

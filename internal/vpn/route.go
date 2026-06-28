@@ -24,30 +24,15 @@ type Route struct {
 
 func NewRoute(spec RouteSpec) (*Route, error) {
 	r := &Route{spec: spec}
-	if err := r.Validate(spec); err != nil {
+	if err := r.validate(); err != nil {
 		return nil, err
 	}
+
 	return r, nil
 }
 
 func (r *Route) Name() string {
 	return "Route"
-}
-
-func (r *Route) Validate(spec RouteSpec) error {
-	if spec.ServerRouteIP == "" {
-		return errors.New("server route ip is empty")
-	}
-	if spec.Gateway == "" {
-		return errors.New("gateway is empty")
-	}
-	if spec.GatewayInterfaceName == "" {
-		return errors.New("real oif name is empty")
-	}
-	if spec.TunnelInterfaceName == "" {
-		return errors.New("tun oif name is empty")
-	}
-	return nil
 }
 
 func (r *Route) Cleanup() error {
@@ -56,6 +41,35 @@ func (r *Route) Cleanup() error {
 	}
 	if err := netlink.DelHostRoute(r.serverRouteIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (r *Route) Apply() error {
+	if err := r.resolve(); err != nil {
+		return err
+	}
+	if err := netlink.AddHostRoute(r.serverRouteIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
+		return err
+	}
+	if err := netlink.ReplaceDefaultRoute(r.tunnelInterfaceIdx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *Route) validate() error {
+	if r.spec.ServerRouteIP == "" {
+		return errors.New("server route ip is empty")
+	}
+	if r.spec.Gateway == "" {
+		return errors.New("gateway is empty")
+	}
+	if r.spec.GatewayInterfaceName == "" {
+		return errors.New("real oif name is empty")
+	}
+	if r.spec.TunnelInterfaceName == "" {
+		return errors.New("tun oif name is empty")
 	}
 	return nil
 }
@@ -85,19 +99,5 @@ func (r *Route) resolve() error {
 	}
 	r.tunnelInterfaceIdx = tunnelIfa.Index
 
-	return nil
-}
-
-func (r *Route) Apply() error {
-	if err := r.resolve(); err != nil {
-		return err
-	}
-
-	if err := netlink.AddHostRoute(r.serverRouteIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
-		return err
-	}
-	if err := netlink.ReplaceDefaultRoute(r.tunnelInterfaceIdx); err != nil {
-		return err
-	}
 	return nil
 }
