@@ -90,6 +90,10 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 	defer conn.Close()
 
+	return c.runTunnel(ctx, tunDevice, conn)
+}
+
+func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
 	errGroup, errCtx := errgroup.WithContext(ctx)
 
 	context.AfterFunc(errCtx, func() {
@@ -102,6 +106,7 @@ func (c *Client) Run(ctx context.Context) error {
 	})
 
 	errGroup.Go(func() error {
+		// 메서드로 변경
 		if err := tunToUdp(errCtx, tunDevice, conn); err != nil {
 			return fmt.Errorf("failed to TUN To UDP: %v", err)
 		}
@@ -114,7 +119,7 @@ func (c *Client) Run(ctx context.Context) error {
 		return nil
 	})
 
-	err = errGroup.Wait()
+	err := errGroup.Wait()
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return nil
 	}

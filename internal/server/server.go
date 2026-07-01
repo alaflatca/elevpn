@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type Server struct {
@@ -31,7 +32,6 @@ func (s *Server) normalize() error {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-
 	routeInfo, err := netlink.GetDefaultRoute()
 	if err != nil {
 		return err
@@ -60,47 +60,42 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	addr, err := s.ListenUDP(ctx)
+	conn, err := s.ListenUDP(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("[server] network: %s, addr: %s\n", addr.Network(), addr.String())
+	defer conn.Close()
 
-	<-ctx.Done()
+	errGroup, errCtx := errgroup.WithContext(ctx)
+
+	context.AfterFunc(errCtx, func() {
+		if err := conn.Close(); err != nil {
+			log.Printf("failed to udp close: %v", err)
+		}
+		if err := tunDevice.Cleanup(); err != nil {
+			log.Printf("failed to tun close: %v", err)
+		}
+	})
+
+	errGroup.Go(func() error {
+		return nil
+	})
+
+	errGroup.Go(func() error {
+		return nil
+	})
 
 	return nil
 }
 
-func (s *Server) ListenUDP(ctx context.Context) (net.Addr, error) {
-	conn, err := net.ListenPacket("udp", s.cfg.ListenAddr)
+func (s *Server) ListenUDP(ctx context.Context) (*net.UDPConn, error) {
+	laddr, err := net.ResolveUDPAddr("udp", s.cfg.ListenAddr)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.ListenUDP("udp", laddr)
 	if err != nil {
 		return nil, fmt.Errorf("binding to udp %s: %v", s.cfg.ListenAddr, err)
 	}
-	go func() {
-		go func() {
-			<-ctx.Done()
-			_ = conn.Close()
-		}()
-
-		for {
-			recvBuf := make([]byte, 1024)
-			n, clientAddr, err := conn.ReadFrom(recvBuf)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			fmt.Printf("[server] client(%s) recv buf: %s\n", clientAddr, string(recvBuf[:n]))
-
-			sendBuf := make([]byte, 0, 1024)
-			sendBuf = fmt.Appendf(sendBuf, "[%s]hello client, i'm server halo?\n", time.Now().String())
-			m, err := conn.WriteTo(sendBuf, clientAddr)
-			if err != nil {
-				return
-			}
-
-			fmt.Printf("[server] client(%s) send buf: %s\n", clientAddr, string(sendBuf[:m]))
-		}
-	}()
-
-	return conn.LocalAddr(), nil
+	return conn, nil
 }

@@ -7,33 +7,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type rtmsg struct {
-	Family   byte
-	DstLen   byte
-	SrcLen   byte
-	Tos      byte
-	Table    byte
-	Protocol byte
-	Scope    byte
-	Type     byte
-	Flags    uint32
-}
-
-func rtgen(msg rtmsg) []byte {
-	b := make([]byte, 12)
-	b[0] = msg.Family
-	b[1] = msg.DstLen
-	b[2] = msg.SrcLen
-	b[3] = msg.Tos
-	b[4] = msg.Table
-	b[5] = msg.Protocol
-	b[6] = msg.Scope
-	b[7] = msg.Type
-	binary.NativeEndian.PutUint32(b[8:12], msg.Flags)
-
-	return b
-}
-
 func AddHostRoute(ipv4, gateway net.IP, ifIndex int) error {
 	fd, err := openNetlink(unix.NETLINK_ROUTE)
 	if err != nil {
@@ -158,4 +131,31 @@ func newBaseRtmsg() rtmsg {
 		Type:     unix.RTN_UNICAST,
 		Flags:    0,
 	}
+}
+
+type rtmsg struct {
+	Family   byte
+	DstLen   byte
+	SrcLen   byte
+	Tos      byte
+	Table    byte
+	Protocol byte
+	Scope    byte
+	Type     byte
+	Flags    uint32
+}
+
+func rtgen(msg rtmsg) []byte {
+	b := make([]byte, 12)
+	b[0] = msg.Family
+	b[1] = msg.DstLen
+	b[2] = msg.SrcLen
+	b[3] = msg.Tos
+	b[4] = msg.Table
+	b[5] = msg.Protocol
+	b[6] = msg.Scope
+	b[7] = msg.Type
+	binary.NativeEndian.PutUint32(b[8:12], msg.Flags)
+
+	return b
 }

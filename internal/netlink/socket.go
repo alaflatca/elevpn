@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	nfnlVersion = 0
-
+	nfnlVersion   = 0
 	nftaBitwiseOp = 6
+
+	nfIPPriNATSrc int32 = 100 // NF_IP_PRI_NAT_SRC
 )
 
 func openNetlink(proto int) (int, error) {
@@ -99,40 +100,6 @@ func recvAcks(fd int, want ...uint32) error {
 	return nil
 }
 
-// Netfilter 통신의 위한 데이터 계층
-//  1. NetLink Header 		# 커널이 "이 데이터 덩어리는 어디까지인가?"를 파악하는 용도 (16바이트)
-//  2. Netfilter Header		# 커널의 Netfilter 모듈이 "IPv4인가, IPv6인가?"를 파악하는 용도 (4바이트)
-//  3. Payload(Attributes)	# 실제 "테이블 이름은 'vpn_table'이다"(체인, 룰 포함) 같은 상세 정보 (가변 길이)
-//
-// ==============================
-// 1. [Batch Begin] Netlink Hdr + NetFilter Hdr
-// 2. [New Table] 	Netlink Hdr + NetFilter Hdr + Table Attributes (Payload)
-// 3. [New Chain] 	Netlink Hdr + NetFilter Hdr + Chain Attributes (Payload)
-// 4. [New Rule]	Netlink Hdr + NetFilter Hdr + Rule  Attributes (Payload)
-// 5. [Batch End] 	Netlink Hdr + NetFilter Hdr
-func batchMsg(seq uint32, msgType uint16) []byte {
-	body := nfgen(unix.AF_UNSPEC, unix.NFNL_SUBSYS_NFTABLES)
-	return nlMsg(seq, msgType, unix.NLM_F_REQUEST, body)
-}
-
-// NetFilter Header
-// 역할: Netfilter 전용 헤더(nfgenmsg)를 생성합니다.
-// 내용: [가족(Family), 버전, 리소스ID_고위, 리소스ID_저위] 형태의 4바이트 데이터
-// family : 어떤 네트워크 체계 (IPv4, IPv6, UNSPEC(미지정, 작업시작 알림))
-//   - AF_INET   : IPv4
-//   - AF_INET6  : IPv6
-//   - AF_UNSPEC : 작업 시작/종료 신호
-//
-// nfnlVersion : Netfilter 넷링크 버전 (보통 0)
-// res_id : 리소스ID,  나중을 위해 예약된 공간 (보통 0,0)
-func nfgen(family byte, resID uint16) []byte {
-	b := make([]byte, 4)
-	b[0] = family
-	b[1] = 0 // nfgenmsg version
-	binary.BigEndian.PutUint16(b[2:4], resID)
-	return b
-}
-
 // Netlink Header (16 + Payload)
 // [ Length		(4 byte)]
 // [ Type 		(2 byte)]
@@ -164,6 +131,7 @@ func nlMsg(seq uint32, msgType uint16, flags uint16, payload []byte) []byte {
 // [ type 		( 2 byte ) ]
 // [ payload	( 가변 길이 ) ]
 // [ padding 	(필요하다면 padding 사용)] attr 포맷은 4의 배수로 만들어서 전달해야됨
+// ===> [length][type][payload][padding]
 func putAttr(buf []byte, typ uint16, payload []byte) []byte {
 	length := 4 + len(payload)
 

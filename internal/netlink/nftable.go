@@ -1,6 +1,7 @@
 package netlink
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -28,7 +29,7 @@ func DeleteMasqueradeTable(tableName string) error {
 
 	packet := batchMsg(1, unix.NFNL_MSG_BATCH_BEGIN)
 	packet = append(packet, buildDelTableMsg(2, tableName)...)
-	packet = append(packet, batchMsg(3, nfnlMsgBatchEnd)...)
+	packet = append(packet, batchMsg(3, unix.NFNL_MSG_BATCH_END)...)
 
 	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return err
@@ -49,7 +50,7 @@ func ApplyMasquerade(spec NFTMasqConfig) error {
 	packet = append(packet, buildNewTableMsg(2, spec.TableName)...)
 	packet = append(packet, buildNewChainMsg(3, spec.TableName, spec.ChainName)...)
 	packet = append(packet, buildNewMasqRuleMsg(4, spec.TableName, spec.ChainName, spec.SrcIP, spec.SrcMask, spec.OutInterface)...)
-	packet = append(packet, batchMsg(5, nfnlMsgBatchEnd)...)
+	packet = append(packet, batchMsg(5, unix.NFNL_MSG_BATCH_END)...)
 
 	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return fmt.Errorf("send nft batch: %w", err)
@@ -84,7 +85,7 @@ func buildNewTableMsg(seq uint32, tableName string) []byte {
 func buildNewChainMsg(seq uint32, tableName, chainName string) []byte {
 	var hookAttrs []byte
 	hookAttrs = putAttr(hookAttrs, unix.NFTA_HOOK_HOOKNUM, be32(unix.NF_INET_POST_ROUTING))
-	hookAttrs = putAttr(hookAttrs, unix.NFTA_HOOK_PRIORITY, beS32(unix.NF_IP_PRI_NAT_SRC))
+	hookAttrs = putAttr(hookAttrs, unix.NFTA_HOOK_PRIORITY, beS32(nfIPPriNATSrc))
 
 	var attrs []byte
 	attrs = putAttr(attrs, unix.NFTA_CHAIN_TABLE, zstr(tableName))
@@ -172,4 +173,38 @@ func wrapExpr(name string, data []byte) []byte {
 	exprAttrs = putAttr(exprAttrs, unix.NFTA_EXPR_NAME, zstr(name))
 	exprAttrs = putNestAttr(exprAttrs, unix.NFTA_EXPR_DATA, data)
 	return putNestAttr(nil, unix.NFTA_LIST_ELEM, exprAttrs)
+}
+
+// NetFilter Header
+// 역할: Netfilter 전용 헤더(nfgenmsg)를 생성합니다.
+// 내용: [가족(Family), 버전, 리소스ID_고위, 리소스ID_저위] 형태의 4바이트 데이터
+// family : 어떤 네트워크 체계 (IPv4, IPv6, UNSPEC(미지정, 작업시작 알림))
+//   - AF_INET   : IPv4
+//   - AF_INET6  : IPv6
+//   - AF_UNSPEC : 작업 시작/종료 신호
+//
+// nfnlVersion : Netfilter 넷링크 버전 (보통 0)
+// res_id : 리소스ID,  나중을 위해 예약된 공간 (보통 0,0)
+func nfgen(family byte, resID uint16) []byte {
+	b := make([]byte, 4)
+	b[0] = family
+	b[1] = 0 // nfgenmsg version
+	binary.BigEndian.PutUint16(b[2:4], resID)
+	return b
+}
+
+// Netfilter 통신의 위한 데이터 계층
+//  1. NetLink Header 		# 커널이 "이 데이터 덩어리는 어디까지인가?"를 파악하는 용도 (16바이트)
+//  2. Netfilter Header		# 커널의 Netfilter 모듈이 "IPv4인가, IPv6인가?"를 파악하는 용도 (4바이트)
+//  3. Payload(Attributes)	# 실제 "테이블 이름은 'vpn_table'이다"(체인, 룰 포함) 같은 상세 정보 (가변 길이)
+//
+// ==============================
+// 1. [Batch Begin] Netlink Hdr + NetFilter Hdr
+// 2. [New Table] 	Netlink Hdr + NetFilter Hdr + Table Attributes (Payload)
+// 3. [New Chain] 	Netlink Hdr + NetFilter Hdr + Chain Attributes (Payload)
+// 4. [New Rule]	Netlink Hdr + NetFilter Hdr + Rule  Attributes (Payload)
+// 5. [Batch End] 	Netlink Hdr + NetFilter Hdr
+func batchMsg(seq uint32, msgType uint16) []byte {
+	body := nfgen(unix.AF_UNSPEC, unix.NFNL_SUBSYS_NFTABLES)
+	return nlMsg(seq, msgType, unix.NLM_F_REQUEST, body)
 }

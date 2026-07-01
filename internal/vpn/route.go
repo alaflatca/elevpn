@@ -36,9 +36,11 @@ func (r *Route) Name() string {
 }
 
 func (r *Route) Cleanup() error {
+	// ip route del <server_ip>/32 via <real_gateway> dev <real_nic>
 	if err := netlink.RestoreDefaultRoute(r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
 	}
+	// ip route replace default via <real_gateway> dev <real_nic>
 	if err := netlink.DelHostRoute(r.serverRouteIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
 	}
@@ -49,9 +51,11 @@ func (r *Route) Apply() error {
 	if err := r.resolve(); err != nil {
 		return err
 	}
+	// ip route add <server_ip>/32 via <real_gateway> dev <real_nic>
 	if err := netlink.AddHostRoute(r.serverRouteIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
 	}
+	// ip route replace default dev <tun_nic>
 	if err := netlink.ReplaceDefaultRoute(r.tunnelInterfaceIdx); err != nil {
 		return err
 	}
