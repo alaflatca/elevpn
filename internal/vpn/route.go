@@ -37,9 +37,9 @@ func (r *Route) Name() string {
 
 func (r *Route) Cleanup() error {
 	// ip route del <server_ip>/32 via <real_gateway> dev <real_nic>
-	if err := netlink.RestoreDefaultRoute(r.gateway, r.gatewayInterfaceIdx); err != nil {
-		return err
-	}
+	// if err := netlink.RestoreDefaultRoute(r.gateway, r.gatewayInterfaceIdx); err != nil {
+	// 	return err
+	// }
 	// ip route replace default via <real_gateway> dev <real_nic>
 	if err := netlink.DelHostRoute(r.serverRouteIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
@@ -56,9 +56,12 @@ func (r *Route) Apply() error {
 		return err
 	}
 	// ip route replace default dev <tun_nic>
-	if err := netlink.ReplaceDefaultRoute(r.tunnelInterfaceIdx); err != nil {
-		return err
-	}
+	// if err := netlink.ReplaceDefaultRoute(r.tunnelInterfaceIdx); err != nil {
+	// 	if delErr := netlink.DelHostRoute(r.serverRouteIP, r.gateway, r.gatewayInterfaceIdx); delErr != nil {
+	// 		return fmt.Errorf("failed to replace default route: %v (failed to rollback host route: %v)", err, delErr)
+	// 	}
+	// 	return fmt.Errorf("failed to replace default route: %v", err)
+	// }
 	return nil
 }
 

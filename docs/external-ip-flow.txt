@@ -1,0 +1,306 @@
+External IP Check Flow
+======================
+
+이 문서는 client에서 외부 IP 조회 API를 호출했을 때,
+응답 IP가 VPN server의 public IP로 보이는지 확인하는 흐름을 정리한 것이다.
+
+목표
+----
+
+client에서 다음 요청을 실행한다.
+
+    curl -s https://api.ipify.org?format=json
+
+VPN 경로가 정상이라면 응답은 client public IP가 아니라 server public IP가 되어야 한다.
+
+예상 결과
+
+    {"ip":"<server_public_ip>"}
+
+
+테스트에 사용한 API
+-------------------
+
+    https://api.ipify.org?format=json
+
+이 API는 요청을 보낸 쪽의 외부 IP를 JSON으로 반환한다.
+
+VPN을 사용하지 않으면 client의 public IP가 나온다.
+VPN 터널과 server masquerade가 정상 동작하면 server의 public IP가 나온다.
+
+
+주의: HTTPS와 IP 직접 요청
+-------------------------
+
+api.ipify.org는 여러 IP로 해석될 수 있다.
+
+예시
+
+    nslookup api.ipify.org
+
+    Name:   api.ipify.org
+    Address: 172.67.74.152
+    Name:   api.ipify.org
+    Address: 104.26.13.205
+    Name:   api.ipify.org
+    Address: 104.26.12.205
+
+하지만 다음처럼 IP로 직접 HTTPS 요청하면 정상 응답이 안 올 수 있다.
+
+    curl https://104.26.13.205?format=json
+
+이유는 HTTPS 요청에서 Host/SNI가 api.ipify.org로 유지되어야 하기 때문이다.
+
+특정 IP로 접속하되 도메인 이름은 유지하려면 --resolve를 사용한다.
+
+    curl -s --resolve api.ipify.org:443:104.26.13.205 \
+      https://api.ipify.org?format=json
+
+의미
+
+    api.ipify.org:443 요청은 104.26.13.205로 접속한다.
+    하지만 HTTPS Host/SNI는 api.ipify.org로 유지한다.
+
+
+Split Route 방식으로 안전하게 테스트
+------------------------------------
+
+원격 EC2 client에서 default route를 바로 tun0로 바꾸면
+SSH 또는 SSM Session Manager 연결까지 영향을 받을 수 있다.
+
+처음에는 외부 IP 조회 API의 IP 하나만 tun0로 보내는 방식이 안전하다.
+
+1. api.ipify.org IP 확인
+
+    nslookup api.ipify.org
+
+2. 테스트할 IP 하나를 tun0로 보내는 route 추가
+
+    sudo ip route add 104.26.13.205/32 dev tun0
+
+의미
+
+    104.26.13.205로 가는 패킷만 tun0 인터페이스로 보낸다.
+    기존 default route는 유지된다.
+
+3. route 적용 확인
+
+    ip route get 104.26.13.205
+
+기대 형태
+
+    104.26.13.205 dev tun0
+
+4. curl 테스트
+
+    curl -s --resolve api.ipify.org:443:104.26.13.205 \
+      https://api.ipify.org?format=json
+
+기대 결과
+
+    {"ip":"<server_public_ip>"}
+
+
+전체 패킷 흐름
+--------------
+
+client에서 curl 실행
+
+    목적지 IP = 104.26.13.205
+
+client routing table 확인
+
+    104.26.13.205/32 dev tun0
+
+client kernel 동작
+
+    curl의 TCP SYN 패킷을 tun0로 보낸다.
+
+elevpn client 동작
+
+    tun0에서 IP packet을 읽는다.
+    읽은 packet을 UDP payload로 감싼다.
+    VPN server endpoint로 UDP 전송한다.
+
+client 실제 네트워크
+
+    client ens5 -> server public IP:9010 UDP
+
+중요한 예외 route
+
+    <server_public_ip>/32 via <real_gateway> dev <real_nic>
+
+이 route가 있어야 VPN server로 가는 UDP 패킷이 tun0로 다시 빨려 들어가지 않는다.
+
+server 실제 네트워크
+
+    server ens5에서 UDP 9010 패킷을 받는다.
+
+elevpn server 동작
+
+    UDP payload에서 원래 IP packet을 꺼낸다.
+    해당 packet을 server tun0에 쓴다.
+
+server kernel 동작
+
+    tun0에서 들어온 packet의 목적지가 104.26.13.205임을 확인한다.
+    ip_forward가 켜져 있으면 ens5로 forwarding한다.
+
+server nftables masquerade
+
+    출발지 IP가 10.77.0.0/24이고,
+    나가는 인터페이스가 ens5이면,
+    source IP를 server의 외부 주소로 변환한다.
+
+외부 API 입장
+
+    요청이 server public IP에서 온 것처럼 보인다.
+
+응답 흐름
+
+    api.ipify.org -> server public IP
+    server ens5 -> server tun0
+    elevpn server가 tun0에서 응답 packet을 읽음
+    server가 UDP로 client peerAddr에 전송
+    elevpn client가 UDP packet을 받아 tun0에 씀
+    client curl이 응답을 받음
+
+
+성공 조건
+---------
+
+client에서 확인
+
+    ip route get 104.26.13.205
+
+기대
+
+    dev tun0
+
+client에서 UDP 전송 확인
+
+    sudo tcpdump -ni ens5 udp port 9010
+
+기대
+
+    client_private_ip.random_port > server_public_ip.9010: UDP
+
+server에서 UDP 수신 확인
+
+    sudo tcpdump -ni ens5 udp port 9010
+
+기대
+
+    client_public_or_private_ip.random_port > server_private_ip.9010: UDP
+
+server에서 TUN packet 확인
+
+    sudo tcpdump -ni tun0 host 104.26.13.205
+
+기대
+
+    10.77.0.2 > 104.26.13.205
+
+server에서 외부 전송 확인
+
+    sudo tcpdump -ni ens5 host 104.26.13.205
+
+기대
+
+    server_private_ip > 104.26.13.205
+    104.26.13.205 > server_private_ip
+
+server ip_forward 확인
+
+    cat /proc/sys/net/ipv4/ip_forward
+
+기대
+
+    1
+
+server masquerade 확인
+
+    sudo nft list table ip vpnnat
+
+기대 형태
+
+    ip saddr 10.77.0.0/24 oifname "ens5" masquerade
+
+
+자주 발생한 문제
+----------------
+
+1. AWS Security Group이 TCP 9010만 열려 있음
+
+증상
+
+    client에서는 UDP 9010을 보내지만 server tcpdump에는 보이지 않는다.
+
+원인
+
+    elevpn은 UDP를 사용한다.
+    TCP 9010과 UDP 9010은 서로 다른 포트 공간이다.
+
+해결
+
+    server Security Group inbound에 UDP 9010을 허용한다.
+
+
+2. curl이 timeout 됨
+
+증상
+
+    curl -v 결과가 다음 위치에서 멈춘다.
+
+    Trying 104.26.13.205:443...
+    Connection timed out
+
+원인 후보
+
+    client packet이 tun0로 들어가지 않음
+    client가 UDP로 server에 보내지 못함
+    server가 UDP를 받지 못함
+    server가 UDP payload를 tun0에 쓰지 못함
+    server forwarding 또는 masquerade가 동작하지 않음
+    server가 응답 packet을 client peerAddr로 다시 보내지 못함
+
+확인 순서
+
+    client tun0
+    client ens5 udp port 9010
+    server ens5 udp port 9010
+    server tun0
+    server ens5 host 104.26.13.205
+
+
+3. client에서 full tunnel 실행 후 SSH/SSM이 끊김
+
+원인
+
+    client default route를 tun0로 바꾸면
+    SSH/SSM 응답 패킷도 tun0로 들어갈 수 있다.
+
+해결 방향
+
+    처음에는 특정 목적지 IP만 tun0로 보내는 split route 방식으로 테스트한다.
+    full tunnel은 마지막 단계에서 테스트한다.
+
+
+요약
+----
+
+client에서 api.ipify.org 요청을 보냈을 때 server public IP가 나오면,
+다음 경로가 모두 동작한 것이다.
+
+    client route
+    client TUN read
+    client UDP send
+    server UDP receive
+    server TUN write
+    server ip_forward
+    server nft masquerade
+    server TUN read
+    server UDP send back
+    client UDP receive
+    client TUN write
+

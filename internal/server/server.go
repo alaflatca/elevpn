@@ -5,16 +5,15 @@ import (
 	"elevpn/internal/netlink"
 	"elevpn/internal/tun"
 	"elevpn/internal/vpn"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"sync"
 
 	"golang.org/x/sync/errgroup"
 )
-
-type Server struct {
-	cfg ServerConfig
-}
 
 type ServerConfig struct {
 	ListenAddr     string
@@ -23,12 +22,18 @@ type ServerConfig struct {
 	VPNNetworkCIDR string
 }
 
-func New(cfg ServerConfig) (*Server, error) {
-	return &Server{cfg: cfg}, nil
+func (s *ServerConfig) normalize() error {
+	return nil
 }
 
-func (s *Server) normalize() error {
-	return nil
+type Server struct {
+	cfg      ServerConfig
+	peerAddr *net.UDPAddr
+	mutex    sync.RWMutex
+}
+
+func New(cfg ServerConfig) (*Server, error) {
+	return &Server{cfg: cfg, mutex: sync.RWMutex{}}, nil
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -66,26 +71,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	errGroup, errCtx := errgroup.WithContext(ctx)
-
-	context.AfterFunc(errCtx, func() {
-		if err := conn.Close(); err != nil {
-			log.Printf("failed to udp close: %v", err)
-		}
-		if err := tunDevice.Cleanup(); err != nil {
-			log.Printf("failed to tun close: %v", err)
-		}
-	})
-
-	errGroup.Go(func() error {
-		return nil
-	})
-
-	errGroup.Go(func() error {
-		return nil
-	})
-
-	return nil
+	return s.runTunnel(ctx, tunDevice, conn)
 }
 
 func (s *Server) ListenUDP(ctx context.Context) (*net.UDPConn, error) {
@@ -98,4 +84,93 @@ func (s *Server) ListenUDP(ctx context.Context) (*net.UDPConn, error) {
 		return nil, fmt.Errorf("binding to udp %s: %v", s.cfg.ListenAddr, err)
 	}
 	return conn, nil
+}
+
+func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
+	errGroup, errCtx := errgroup.WithContext(ctx)
+
+	context.AfterFunc(errCtx, func() {
+		if err := conn.Close(); err != nil {
+			log.Printf("failed to udp close: %v", err)
+		}
+		if err := tunDevice.Cleanup(); err != nil {
+			log.Printf("failed to tun close: %v", err)
+		}
+	})
+
+	errGroup.Go(func() error {
+		return s.tunToUdp(errCtx, tunDevice, conn)
+	})
+	errGroup.Go(func() error {
+		return s.udpToTun(errCtx, conn, tunDevice)
+	})
+
+	err := errGroup.Wait()
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+
+	return err
+}
+
+func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
+	buf := make([]byte, 65535)
+	for {
+		n, err := tunDevice.Read(buf)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		if n > 0 {
+			s.mutex.RLock()
+			peerAddr := s.peerAddr
+			s.mutex.RUnlock()
+			if peerAddr == nil {
+				continue
+			}
+
+			written, err := conn.WriteToUDP(buf[:n], peerAddr)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			if written != n {
+				return io.ErrShortWrite
+			}
+		}
+	}
+}
+
+func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error {
+	buf := make([]byte, 65535)
+	for {
+		n, peerAddr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+
+		s.mutex.Lock()
+		s.peerAddr = peerAddr
+		s.mutex.Unlock()
+
+		if n > 0 {
+			written, err := tunDevice.Write(buf[:n])
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			if written != n {
+				return io.ErrShortWrite
+			}
+		}
+	}
 }

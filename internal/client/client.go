@@ -106,7 +106,6 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	})
 
 	errGroup.Go(func() error {
-		// 메서드로 변경
 		if err := tunToUdp(errCtx, tunDevice, conn); err != nil {
 			return fmt.Errorf("failed to TUN To UDP: %v", err)
 		}
