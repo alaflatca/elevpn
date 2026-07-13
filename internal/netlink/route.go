@@ -19,11 +19,7 @@ func AddHostRoute(ipv4, gateway net.IP, ifIndex int) error {
 		return err
 	}
 
-	if err := recvAcks(fd, 1); err != nil {
-		return err
-	}
-
-	return nil
+	return recvAcks(fd, 1)
 }
 
 func DelHostRoute(ipv4, gateway net.IP, ifIndex int) error {
@@ -38,7 +34,7 @@ func DelHostRoute(ipv4, gateway net.IP, ifIndex int) error {
 		return err
 	}
 
-	return nil
+	return recvAcks(fd, 1)
 }
 
 func RestoreDefaultRoute(gateway net.IP, ifIndex int) error {

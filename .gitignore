@@ -1,1 +1,18 @@
-bin
+/bin/
+
+# 실제 변수값
+infra/terraform/terraform.tfvars
+
+# Terraform 작업 디렉터리
+infra/terraform/.terraform/
+
+# Terraform state
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+
+# 저장된 plan 파일
+infra/terraform/*.tfplan
+
+# 크래시 로그
+infra/terraform/crash.log
+infra/terraform/crash.*.log

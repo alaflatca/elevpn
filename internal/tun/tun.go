@@ -52,6 +52,7 @@ func (t *Tun) Apply() error {
 
 func (t *Tun) Cleanup() error {
 	if t == nil || t.f == nil {
+		log.Printf("[%s] tun already close", t.name)
 		return nil
 	}
 	log.Printf("[%s] tun interface close", t.name)
