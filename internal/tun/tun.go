@@ -52,12 +52,17 @@ func (t *Tun) Apply() error {
 
 func (t *Tun) Cleanup() error {
 	if t == nil || t.f == nil {
-		log.Printf("[%s] tun already close", t.name)
 		return nil
 	}
-	log.Printf("[%s] tun interface close", t.name)
 
-	return t.f.Close()
+	err := t.f.Close()
+	if err != nil {
+		return err
+	}
+	t.f = nil
+
+	log.Printf("[%s] tun interface close", t.name)
+	return nil
 }
 
 func (t *Tun) Name() string {
@@ -180,6 +185,11 @@ func (t *Tun) Write(b []byte) (int, error) {
 	return t.f.Write(b)
 }
 
+// context.AfterFunc -> tunDevice.Cleanup이 실행되어도
+// tunToUdp의 tunDevice.Read를 즉시 깨우지 않음 (client, server)
+// tunToUdp의 blocking Read가 Close 이후 늦게 반환됨 ( udp socket 은 즉시 깨움 )
+// 서비스 종료에 많은 시간 소요됨
+
 func (t *Tun) Read(b []byte) (int, error) {
 	if t == nil || t.f == nil {
 		return 0, errors.New("tun file is nil")
@@ -187,3 +197,117 @@ func (t *Tun) Read(b []byte) (int, error) {
 
 	return t.f.Read(b)
 }
+
+/*
+이유:
+
+tunTodup는 tunDevice.Read()에서 blocking 상태로 대기
+ -> tun.Read()
+ -> TUN에 packet이 들어올 때까지 block
+
+ Ctrl+c가 오면 context는 cancel되지만, tunToUdp goruntine은 이미
+ tuneDevice.Read() 호출에서 block 중이다.
+ Read가 반환되기 전까지는 함수의 다음 줄로 진행하지 못하므로 ctx.Err()를 확인할 수 없다.
+
+현재는 AfterFunc에서 tundevice.Cleanup()을 호출해서 TUN fd를 닫고,
+그 결과로 Read()가 깨어나기를 기대함.
+
+문제는 TUN fd는 일반 socket이 아니라 /dev/net/tun character device라서, 다른 goroutine에서
+Close() 했다고 해서 blocking Read() 가 즉시 깨어난다고 강하게 기대하기 어렵다
+
+Ctrl+c
+-> context cancel
+-> tun fd Close
+-> 하지만 tun.Read가 늦게 반환
+-> errGroup.Wait가 계속 대기
+-> Teardown도 늦게 실행
+
+* Close를 goroutine 종료 신호처럼 사용하고 있다.
+하지만 TUN blocking Read는 Close에 즉시 반응한다고 보장하기 어렵다.
+
+
+
+
+TUN Read는 TUN 드라이버의 wait queue에서 기다림
+Close는 fd reference를 닫는 작업
+blocking read를 즉시 interrupt하는 방식은 fd 종류/드라이버 구현/런타임 처리에 따라 다를 수 있음
+Go의 os.File.Read는 context-aware하지 않음
+
+
+해결법:
+
+1. TUN fd를 non-blocking으로 연다 (현재는 blocking 모드)
+2. poll로 TUN fd가 readable인지 기다린다.
+3. context cancel은 eventfd에 write 해서 poll을 깨운다.
+4. poll 결과가:
+   - tun fd readable이면 tun.Read()
+   - eventfd readble이면 context.Canceled 반환
+5. TUN Cleanup은 goroutine을 깨우기 위한 용도가 아니라 최종 리소스 정리 용도로만 사용한다.
+
+eventfd:
+	cancel 신호로 poll을 깨우는 용도
+poll:
+	tun fd에 읽을 packet이 있는지 확인하는 용도
+tun.Close:
+	최종 fd 정리 용도
+
+
+=================
+**** readable 이란 ****
+user process
+	|
+	| poll(fd: tunFd, events: POLLIN)
+	v
+kernel
+	|
+	| 1. 현재 프로세스의 fd table 조회 (프로세스마다 자기 fd table을 가지고있음)
+	v
+fd table
+	|
+	| tunFd -> struct file
+	v
+struct file
+	|
+	| 2. file->f_op->poll(file, poll_table) 호출
+	v
+TUN driver poll 함수
+	|
+	| 3. poll_wait(file, tun_wait_queue, poll_table)
+	|	현재 task를 TUN wait queue에 등록
+	|
+	| 4. TUN packet queue 확인
+	|
+	|	packet 있음
+	|		-> POLLIN 반환
+	|
+	|	packet 없음
+	|		-> 0 반환
+	v
+kernel poll core
+	|
+	| 5. POLLIN 있으면 user에게 즉시 반환
+	|
+	| 6. 이벤트 없으면 현재 task를 sleep
+	v
+나중에 packet 도착
+	|
+	v
+TUN driver
+	|
+	| TUN queue에 packet 추가
+	| wake_up(tun_wait_queue)
+	v
+kernel poll core
+	|
+	| sleep 중인 task 깨어남
+	| 다시 상태 확인
+	| revents = POLLIN 설정
+	v
+user process
+	|
+	| poll 반환
+	| revents에 POLLIN 있음
+	v
+tun.Read()
+
+*

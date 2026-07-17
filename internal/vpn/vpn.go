@@ -4,6 +4,7 @@ import (
 	"elevpn/internal/netlink"
 	"fmt"
 	"log"
+	"time"
 )
 
 type VpnComponent interface {
@@ -30,13 +31,17 @@ func (m *VpnManager) ApplyAll(components ...VpnComponent) error {
 }
 
 func (m *VpnManager) Teardown() {
+	log.Println("Teardown start")
 	for i := len(m.components) - 1; i >= 0; i-- {
 		c := m.components[i]
 
+		start := time.Now()
 		if err := c.Cleanup(); err != nil {
 			log.Printf("[%s] failed to cleanup: %v", c.Name(), err)
 		}
+		log.Printf("[%s] elapsed time: %s", c.Name(), time.Since(start).String())
 	}
+	log.Println("Teardown end")
 }
 
 func ExternalInterface() (netlink.DefaultRoute, error) {

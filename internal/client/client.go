@@ -94,34 +94,48 @@ func (c *Client) Run(ctx context.Context) error {
 }
 
 func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
+	log.Println("runTunnel start")
+
 	errGroup, errCtx := errgroup.WithContext(ctx)
 
 	context.AfterFunc(errCtx, func() {
+		log.Println("after func start")
 		if err := conn.Close(); err != nil {
 			log.Printf("failed to udp close: %v", err)
 		}
 		if err := tunDevice.Cleanup(); err != nil {
 			log.Printf("failed to tun close: %v", err)
 		}
+
+		log.Println("after func end")
 	})
 
 	errGroup.Go(func() error {
+		log.Println("tunToUdp start")
 		if err := tunToUdp(errCtx, tunDevice, conn); err != nil {
-			return fmt.Errorf("failed to TUN To UDP: %v", err)
+			log.Printf("tunToUdp end(%v)", err)
+			return fmt.Errorf("failed to TUN To UDP: %w", err)
 		}
+		log.Println("tunToUdp end")
 		return nil
 	})
 	errGroup.Go(func() error {
+		log.Println("udpToTun start")
 		if err := udpToTun(errCtx, conn, tunDevice); err != nil {
-			return fmt.Errorf("failed to UDP to TUN: %v", err)
+			log.Printf("udpToTun end(%v)", err)
+			return fmt.Errorf("failed to UDP to TUN: %w", err)
 		}
+		log.Println("udpToTun end")
 		return nil
 	})
 
 	err := errGroup.Wait()
-	if errors.Is(ctx.Err(), context.Canceled) {
+	if errors.Is(err, context.Canceled) {
+		log.Println("runTunnel end (context.Canceled)")
 		return nil
 	}
+
+	log.Println("runTunnel end")
 
 	return err
 }
