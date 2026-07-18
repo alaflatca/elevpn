@@ -3,6 +3,7 @@
 package tun
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -31,6 +32,7 @@ func New(name string, cidr string) (*Tun, error) {
 	if ip.To4() == nil {
 		return nil, fmt.Errorf("tun cidr must be IPv4: %q", cidr)
 	}
+
 	return &Tun{name: name, cidr: cidr}, nil
 }
 
@@ -70,7 +72,7 @@ func (t *Tun) Name() string {
 }
 
 func (t *Tun) create() error {
-	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("open /dev/net/tun: %v", err)
 	}
@@ -177,7 +179,7 @@ func (t *Tun) up() error {
 	return nil
 }
 
-func (t *Tun) Write(b []byte) (int, error) {
+func (t *Tun) WriteContext(ctx context.Context, b []byte) (int, error) {
 	if t == nil || t.f == nil {
 		return 0, errors.New("tun file is nil")
 	}
@@ -190,12 +192,60 @@ func (t *Tun) Write(b []byte) (int, error) {
 // tunToUdp의 blocking Read가 Close 이후 늦게 반환됨 ( udp socket 은 즉시 깨움 )
 // 서비스 종료에 많은 시간 소요됨
 
-func (t *Tun) Read(b []byte) (int, error) {
+func (t *Tun) ReadContext(ctx context.Context, b []byte) (int, error) {
 	if t == nil || t.f == nil {
 		return 0, errors.New("tun file is nil")
 	}
 
-	return t.f.Read(b)
+	// eventfd  추가 필요함
+	fds := []unix.PollFd{
+		{Fd: int32(t.f.Fd()), Events: unix.POLLIN},
+	}
+
+	for {
+		_, err := unix.Poll(fds, -1)
+		if err != nil {
+			// syscall이 signal handler 실행 때문에 중단됨
+			// 커널이 syscall을 완료하지 않고 -1/EINTR로 반환함
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			// fd가 O_NONBLOCK 상태
+			// read 호출했지만 현재 읽은 packet이 없음
+			// 커널이 block하지 않고 -1/EAGAIN 반환
+			if errors.Is(err, unix.EAGAIN) {
+				continue
+			}
+			// 요청한 작업은 blocking될 상황이다ㅣ.
+			// 하지만 fd가 non-blocking이므로 block하지 않고 반환한다.
+			if errors.Is(err, unix.EWOULDBLOCK) {
+				continue
+			}
+			return 0, fmt.Errorf("failed to tun poll: %w", err)
+		}
+
+		for i := range fds {
+			revents := fds[i].Revents
+
+			// fd가 유효하지 않음 (닫힌 fd이거나 잘못된 fd 번호일 때 발생할 수 있음)
+			if revents&unix.POLLNVAL != 0 {
+				return 0, fmt.Errorf("tun poll invalid fd (POLLNVAL), fds=%d", i)
+			}
+			// fd에 에러 상태가 발생함 (장치나 소켓 레벨에서 오류가 있음을 의미함)
+			if revents&unix.POLLERR != 0 {
+				return 0, fmt.Errorf("tun poll error event (POLLERR), fds=%d", i)
+			}
+			// 읽을 데이터가 있음 (지금 read를 호출하면 block되지 않고 데이터를 읽을 수 있음을 의미함)
+			if revents&unix.POLLIN != 0 {
+				return t.f.Read(b)
+			}
+			// hang up 상태 (상대나 장치가 닫혔거나 더 이상 정상적인 I/O가 불가능한 상태를 의미함)
+			if revents&unix.POLLHUP != 0 {
+				return 0, fmt.Errorf("tun poll hangup (POLLHUP), fds=%d", i)
+			}
+			return 0, fmt.Errorf("unexpected poll event: revents=%v", revents)
+		}
+	}
 }
 
 /*
@@ -310,4 +360,4 @@ user process
 	v
 tun.Read()
 
-*
+*/
