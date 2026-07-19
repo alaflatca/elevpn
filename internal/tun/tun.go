@@ -192,14 +192,15 @@ func (t *Tun) WriteContext(ctx context.Context, b []byte) (int, error) {
 // tunToUdp의 blocking Read가 Close 이후 늦게 반환됨 ( udp socket 은 즉시 깨움 )
 // 서비스 종료에 많은 시간 소요됨
 
-func (t *Tun) ReadContext(ctx context.Context, b []byte) (int, error) {
+func (t *Tun) ReadContext(ctx context.Context, b []byte, eventFd int) (int, error) {
 	if t == nil || t.f == nil {
 		return 0, errors.New("tun file is nil")
 	}
 
 	// eventfd  추가 필요함
 	fds := []unix.PollFd{
-		{Fd: int32(t.f.Fd()), Events: unix.POLLIN},
+		{Fd: int32(eventFd), Events: unix.POLLIN},  // index 0
+		{Fd: int32(t.f.Fd()), Events: unix.POLLIN}, // index 1
 	}
 
 	for {
@@ -224,9 +225,12 @@ func (t *Tun) ReadContext(ctx context.Context, b []byte) (int, error) {
 			return 0, fmt.Errorf("failed to tun poll: %w", err)
 		}
 
-		for i := range fds {
+		for i, fd := range fds {
 			revents := fds[i].Revents
 
+			if revents == 0 {
+				continue
+			}
 			// fd가 유효하지 않음 (닫힌 fd이거나 잘못된 fd 번호일 때 발생할 수 있음)
 			if revents&unix.POLLNVAL != 0 {
 				return 0, fmt.Errorf("tun poll invalid fd (POLLNVAL), fds=%d", i)
@@ -237,7 +241,18 @@ func (t *Tun) ReadContext(ctx context.Context, b []byte) (int, error) {
 			}
 			// 읽을 데이터가 있음 (지금 read를 호출하면 block되지 않고 데이터를 읽을 수 있음을 의미함)
 			if revents&unix.POLLIN != 0 {
-				return t.f.Read(b)
+				if i == 0 { // event fd
+					var eventBuf [8]byte
+					_, err := unix.Read(int(fd.Fd), eventBuf[:])
+					if err != nil {
+						return 0, err
+					}
+					return 0, context.Canceled
+
+				}
+				if i == 1 { // tun fd
+					return t.f.Read(b)
+				}
 			}
 			// hang up 상태 (상대나 장치가 닫혔거나 더 이상 정상적인 I/O가 불가능한 상태를 의미함)
 			if revents&unix.POLLHUP != 0 {

@@ -5,6 +5,7 @@ import (
 	"elevpn/internal/netlink"
 	"elevpn/internal/tun"
 	"elevpn/internal/vpn"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"sync"
 
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 )
 
 type ServerConfig struct {
@@ -89,22 +91,31 @@ func (s *Server) ListenUDP(ctx context.Context) (*net.UDPConn, error) {
 func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
 	log.Println("runTunnel start")
 
+	eventFd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(eventFd)
+
 	errGroup, errCtx := errgroup.WithContext(ctx)
 
 	context.AfterFunc(errCtx, func() {
+		var eventBuf [8]byte
+		binary.NativeEndian.PutUint64(eventBuf[:], 1)
+		if _, err := unix.Write(eventFd, eventBuf[:]); err != nil {
+			log.Printf("failed to write eventfd (AfterFunc): %v", err)
+		}
+
 		log.Println("after func start")
 		if err := conn.Close(); err != nil {
 			log.Printf("failed to udp close: %v", err)
-		}
-		if err := tunDevice.Cleanup(); err != nil {
-			log.Printf("failed to tun close: %v", err)
 		}
 		log.Println("after func end")
 	})
 
 	errGroup.Go(func() error {
 		log.Println("tunToUdp start")
-		if err := s.tunToUdp(errCtx, tunDevice, conn); err != nil {
+		if err := s.tunToUdp(errCtx, tunDevice, conn, eventFd); err != nil {
 			log.Printf("tunToUdp end(%v)", err)
 			return fmt.Errorf("failed to TUN To UDP: %w", err)
 		}
@@ -121,7 +132,7 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 		return nil
 	})
 
-	err := errGroup.Wait()
+	err = errGroup.Wait()
 	if errors.Is(err, context.Canceled) {
 		log.Println("runTunnel end (context.Canceled)")
 		return nil
@@ -132,14 +143,11 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	return err
 }
 
-func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
+func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, eventFd int) error {
 	buf := make([]byte, 65535)
 	for {
-		n, err := tunDevice.Read(buf)
+		n, err := tunDevice.ReadContext(ctx, buf, eventFd)
 		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
 			return err
 		}
 		if n > 0 {
@@ -180,7 +188,7 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 		s.mutex.Unlock()
 
 		if n > 0 {
-			written, err := tunDevice.Write(buf[:n])
+			written, err := tunDevice.WriteContext(ctx, buf[:n])
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
