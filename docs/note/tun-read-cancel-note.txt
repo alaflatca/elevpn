@@ -1,0 +1,26 @@
+배경:
+  프로그램을 테스트하는 과정에서 ctrl+c로 중단했을때 tunToUdp 함수에서 20초 이상 종료가 지연됨
+
+원인:
+  blocking TUN read가 fd close를 즉시 취소 신호로 보지 않음
+
+이유:
+  Linux에서 close는 fd 번호를 닫는 것이고,
+  이미 진행 중인 read syscall은 별도 file 참조를 들고 계속 대기할 수 있음
+
+해결:
+  tun device open 시 nonblock 모드로 설정한다. 기존에는 blocking 모드였다.
+  
+  tunToUdp는 tun.Read()에 바로 들어가지 않고,
+  poll을 이용해 tun fd와 eventfd 중 어느 하나가 readable 상태가 될 때까지 대기한다.
+  
+  tun fd가 readable이면 tun에서 패킷을 읽고 UDP로 전송한다.
+  
+  cancel 요청이 오면 AfterFunc에서 eventfd에 값을 쓴다.
+  eventfd가 readable 상태가 되면 poll이 반환되고,
+  ReadContext는 context.Canceled를 반환한다.
+  
+  tunToUdp는 context.Canceled를 받고 종료된다. 
+
+
+* 참고: Linux close(2) man page도 다른 thread가 fd를 닫아도 blocking I/O가 계속될 수 있다고 설명.
