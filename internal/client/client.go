@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"elevpn/internal/netlink"
+	"elevpn/internal/protocol"
 	"elevpn/internal/tun"
 	"elevpn/internal/vpn"
 	"encoding/binary"
@@ -92,12 +93,15 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	return c.runTunnel(ctx, tunDevice, conn)
+	peerID, err := c.handshake(ctx, conn)
+	if err != nil {
+		return err
+	}
+
+	return c.runTunnel(ctx, tunDevice, conn, peerID)
 }
 
-func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
-	log.Println("runTunnel start")
-
+func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, peerID uint64) error {
 	// initval, eventfd counter 초기값
 	// EFD_CLOEXEC, exec 시 fd 자동 close
 	// EFD_NONBLOCK, read/write가 block되지 않게 함
@@ -106,6 +110,13 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 		return fmt.Errorf("failed to Eventfd: %v", err)
 	}
 	defer unix.Close(eventFd)
+
+	session := &tunnelSession{
+		tun:     tunDevice,
+		conn:    conn,
+		eventFd: eventFd,
+		peerID:  peerID,
+	}
 
 	errGroup, errCtx := errgroup.WithContext(ctx)
 
@@ -116,70 +127,97 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 			log.Printf("failed to write eventfd (AfterFunc): %v", err)
 		}
 
-		log.Println("after func start")
 		if err := conn.Close(); err != nil {
 			log.Printf("failed to udp close: %v", err)
 		}
-
-		log.Println("after func end")
 	})
 
 	errGroup.Go(func() error {
-		log.Println("tunToUdp start")
-		if err := tunToUdp(errCtx, tunDevice, conn, eventFd); err != nil {
-			log.Printf("tunToUdp end(%v)", err)
+		if err := tunToUdp(errCtx, session); err != nil {
 			return fmt.Errorf("failed to TUN To UDP: %w", err)
 		}
-		log.Println("tunToUdp end")
 		return nil
 	})
 	errGroup.Go(func() error {
-		log.Println("udpToTun start")
-		if err := udpToTun(errCtx, conn, tunDevice); err != nil {
-			log.Printf("udpToTun end(%v)", err)
+		if err := udpToTun(errCtx, session); err != nil {
 			return fmt.Errorf("failed to UDP to TUN: %w", err)
 		}
-		log.Println("udpToTun end")
 		return nil
 	})
 
 	err = errGroup.Wait()
 	if errors.Is(err, context.Canceled) {
-		log.Println("runTunnel end (context.Canceled)")
 		return nil
 	}
-
-	log.Println("runTunnel end")
 
 	return err
 }
 
-func tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, eventFd int) error {
-	buf := make([]byte, 65535)
+func (c *Client) handshake(ctx context.Context, conn *net.UDPConn) (uint64, error) {
+	m := &protocol.Message{
+		Type: protocol.MessageTypeAloha,
+	}
+	packet, err := protocol.Encode(m)
+	if err != nil {
+		return 0, err
+	}
+	_, err = conn.Write(packet)
+	if err != nil {
+		return 0, err
+	}
+
+	recvBuf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize)
+	n, err := conn.Read(recvBuf)
+	if err != nil {
+		return 0, err
+	}
+
+	message, err := protocol.Decode(recvBuf[:n])
+	if err != nil {
+		return 0, err
+	}
+	if message.Type != protocol.MessageTypeWelcome {
+		return 0, fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeWelcome, message.Type)
+	}
+
+	return message.PeerID, nil
+}
+
+func tunToUdp(ctx context.Context, sess *tunnelSession) error {
+	buf := make([]byte, protocol.MaxPayloadSize)
 	for {
-		n, err := tunDevice.ReadContext(ctx, buf, eventFd)
+		n, err := sess.tun.ReadContext(ctx, buf, sess.eventFd)
 		if err != nil {
 			return err
 		}
 		if n > 0 {
-			written, err := conn.Write(buf[:n])
+			message := protocol.Message{
+				Type:    protocol.MessageTypeData,
+				PeerID:  sess.peerID,
+				Payload: buf[:n],
+			}
+			packet, err := protocol.Encode(&message)
+			if err != nil {
+				return err
+			}
+			written, err := sess.conn.Write(packet)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
 				return err
 			}
-			if written != n {
+			if written != len(packet) {
 				return io.ErrShortWrite
 			}
 		}
 	}
 }
 
-func udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error {
-	buf := make([]byte, 65535)
+func udpToTun(ctx context.Context, sess *tunnelSession) error {
+	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize)
 	for {
-		n, err := conn.Read(buf)
+		n, err := sess.conn.Read(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -187,14 +225,21 @@ func udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error 
 			return err
 		}
 		if n > 0 {
-			written, err := tunDevice.WriteContext(ctx, buf[:n])
+			packet, err := protocol.Decode(buf[:n])
+			if err != nil {
+				return err
+			}
+			if packet.Type != protocol.MessageTypeData {
+				return fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeData, packet.Type)
+			}
+			written, err := sess.tun.WriteContext(ctx, packet.Payload)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
 				return err
 			}
-			if written != n {
+			if written != len(packet.Payload) {
 				return io.ErrShortWrite
 			}
 		}
