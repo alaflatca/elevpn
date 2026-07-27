@@ -121,12 +121,14 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	errGroup, errCtx := errgroup.WithContext(ctx)
 
 	context.AfterFunc(errCtx, func() {
+		// eventFd에 1증가 write
 		var eventBuf [8]byte
 		binary.NativeEndian.PutUint64(eventBuf[:], 1)
 		if _, err := unix.Write(eventFd, eventBuf[:]); err != nil {
 			log.Printf("failed to write eventfd (AfterFunc): %v", err)
 		}
 
+		// udp connection 종료 (tun은 Cleanup에서 처리)
 		if err := conn.Close(); err != nil {
 			log.Printf("failed to udp close: %v", err)
 		}
@@ -153,6 +155,7 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	return err
 }
 
+// context 처리
 func (c *Client) handshake(ctx context.Context, conn *net.UDPConn) (uint64, error) {
 	m := &protocol.Message{
 		Type: protocol.MessageTypeAloha,

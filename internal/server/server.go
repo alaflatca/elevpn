@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"elevpn/internal/netlink"
+	"elevpn/internal/protocol"
 	"elevpn/internal/tun"
 	"elevpn/internal/vpn"
 	"encoding/binary"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
@@ -29,13 +31,13 @@ func (s *ServerConfig) normalize() error {
 }
 
 type Server struct {
-	cfg      ServerConfig
-	peerAddr *net.UDPAddr
-	mutex    sync.RWMutex
+	cfg   ServerConfig
+	mutex sync.RWMutex
+	peers *peerStore
 }
 
 func New(cfg ServerConfig) (*Server, error) {
-	return &Server{cfg: cfg, mutex: sync.RWMutex{}}, nil
+	return &Server{cfg: cfg, peers: newPeerStore()}, nil
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -76,21 +78,7 @@ func (s *Server) Run(ctx context.Context) error {
 	return s.runTunnel(ctx, tunDevice, conn)
 }
 
-func (s *Server) ListenUDP(ctx context.Context) (*net.UDPConn, error) {
-	laddr, err := net.ResolveUDPAddr("udp", s.cfg.ListenAddr)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := net.ListenUDP("udp", laddr)
-	if err != nil {
-		return nil, fmt.Errorf("binding to udp %s: %v", s.cfg.ListenAddr, err)
-	}
-	return conn, nil
-}
-
 func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn) error {
-	log.Println("runTunnel start")
-
 	eventFd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
 	if err != nil {
 		return err
@@ -106,29 +94,21 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 			log.Printf("failed to write eventfd (AfterFunc): %v", err)
 		}
 
-		log.Println("after func start")
 		if err := conn.Close(); err != nil {
 			log.Printf("failed to udp close: %v", err)
 		}
-		log.Println("after func end")
 	})
 
 	errGroup.Go(func() error {
-		log.Println("tunToUdp start")
 		if err := s.tunToUdp(errCtx, tunDevice, conn, eventFd); err != nil {
-			log.Printf("tunToUdp end(%v)", err)
 			return fmt.Errorf("failed to TUN To UDP: %w", err)
 		}
-		log.Println("tunToUdp end")
 		return nil
 	})
 	errGroup.Go(func() error {
-		log.Println("udpToTun start")
 		if err := s.udpToTun(errCtx, conn, tunDevice); err != nil {
-			log.Printf("udpToTun end(%v)", err)
 			return fmt.Errorf("failed to UDP to TUN: %w", err)
 		}
-		log.Println("udpToTun end")
 		return nil
 	})
 
@@ -138,27 +118,30 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 		return nil
 	}
 
-	log.Println("runTunnel stop")
-
 	return err
 }
 
 func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, eventFd int) error {
-	buf := make([]byte, 65535)
+	buf := make([]byte, protocol.MaxPayloadSize)
 	for {
 		n, err := tunDevice.ReadContext(ctx, buf, eventFd)
 		if err != nil {
 			return err
 		}
+
 		if n > 0 {
-			s.mutex.RLock()
-			peerAddr := s.peerAddr
-			s.mutex.RUnlock()
-			if peerAddr == nil {
+			message, err := protocol.Decode(buf[:n])
+			if err != nil {
+				log.Printf("[tunToUdp] failed to decode: %v", err)
 				continue
 			}
 
-			written, err := conn.WriteToUDP(buf[:n], peerAddr)
+			peer, ok := s.peers.getByID(message.PeerID)
+			if !ok {
+				return fmt.Errorf("not found peer id=%d", message.PeerID)
+			}
+
+			written, err := conn.WriteToUDP(buf[:n], peer.addr)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -173,7 +156,8 @@ func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDP
 }
 
 func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error {
-	buf := make([]byte, 65535)
+	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize)
+
 	for {
 		n, peerAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
@@ -183,21 +167,67 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 			return err
 		}
 
-		s.mutex.Lock()
-		s.peerAddr = peerAddr
-		s.mutex.Unlock()
+		message, err := protocol.Decode(buf[:n])
+		if err != nil {
+			log.Printf("[udpToTun] failed to decode: %v", err)
+			continue
+		}
 
-		if n > 0 {
-			written, err := tunDevice.WriteContext(ctx, buf[:n])
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				return err
+		switch message.Type {
+		case protocol.MessageTypeAloha:
+			err = s.handleAloha(conn, peerAddr)
+		case protocol.MessageTypeKeepalive:
+			err = s.handleKeepalive()
+		case protocol.MessageTypeData:
+			err = s.handleData(ctx, tunDevice, peerAddr, *message)
+		default: // pass 하는게 나을지 로그를 찍을지? 쓸모없는 데이터를 굳이 로그를 찍어야하는지?
+			continue
+		}
+
+		if err != nil {
+			if errors.Is(err, ErrDropPacket) {
+				log.Printf("[udpToTun] drop packet: %v", err)
+				continue
 			}
-			if written != n {
-				return io.ErrShortWrite
-			}
+			return err
 		}
 	}
+}
+
+func (s *Server) ListenUDP(ctx context.Context) (*net.UDPConn, error) {
+	laddr, err := net.ResolveUDPAddr("udp", s.cfg.ListenAddr)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.ListenUDP("udp", laddr)
+	if err != nil {
+		return nil, fmt.Errorf("binding to udp %s: %v", s.cfg.ListenAddr, err)
+	}
+	return conn, nil
+}
+
+/*
+tun read packet (L3 IP packet)
+[IPv4 header] [transport header] [transport payload]
+
+[IPv4 header] 20 bytes (* 9 offset Protocol 에따라 transport header 가 달라짐(tcp, udp, icmp)
+byte offset
+0               Version + IHL
+1               DSCP/ECN
+2~3             Total Length
+4~5             Identification
+6~7             Flags + Fragment Offset
+8               TTL
+9               Protocol
+10~11           Header Checksum
+12~15           Source IP
+16~19           Destination IP
+20~             Options, if IHL > 5
+*/
+func extractIPv4Dst(packet []byte) (netip.Addr, error) {
+	if len(packet) != 20 {
+
+	}
+	destIPv4 := packet[16:19]
+
 }

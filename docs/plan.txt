@@ -1,0 +1,5 @@
+월: server peer/handler/DATA 흐름 완성
+화: client-server 통합 테스트
+수: keepalive 또는 timeout 중 하나만 추가
+목: README, 구조 문서, 테스트 로그 정리
+금: 빌드/실행 방법 정리 후 제출
