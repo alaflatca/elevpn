@@ -10,9 +10,7 @@ import (
 type clientOptions struct {
 	ListenAddr     string
 	ServerEndpoint string
-	Gateway        string
 	TunName        string
-	TunAddrCIDR    string
 }
 
 var clientOpts = clientOptions{}
@@ -24,15 +22,14 @@ var clientCmd = &cobra.Command{
 		if verbose {
 			fmt.Println("[client] verbose enabled")
 		}
-		fmt.Printf("[client] init\n listen=%s\n endpoint=%s\n tunName=%s\n tunCIDR=%s\n\n",
-			clientOpts.ListenAddr, clientOpts.ServerEndpoint, clientOpts.TunName, clientOpts.TunAddrCIDR,
+		fmt.Printf("[client] init\n listen=%s\n endpoint=%s\n tunName=%s\n\n",
+			clientOpts.ListenAddr, clientOpts.ServerEndpoint, clientOpts.TunName,
 		)
 
 		cli, err := client.New(client.ClientConfig{
 			ListenAddr:     clientOpts.ListenAddr,
 			ServerEndpoint: clientOpts.ServerEndpoint,
 			TunName:        clientOpts.TunName,
-			TunAddrCIDR:    clientOpts.TunAddrCIDR,
 		})
 		if err != nil {
 			return err
@@ -44,12 +41,10 @@ var clientCmd = &cobra.Command{
 
 func init() {
 	clientCmd.Flags().StringVar(&clientOpts.ListenAddr, "listen", ":0", "elevpn local UDP address")
-	clientCmd.Flags().StringVar(&clientOpts.Gateway, "gateway", "", "elevpn local gateway")
 	clientCmd.Flags().StringVar(&clientOpts.ServerEndpoint, "server-endpoint", "0.0.0.0:9010", "elevpn endpoint UDP address")
 	// server-route-ip 는 endpoint 에서 가져와서 처리하는걸로
 	// default gateway 값 필요함
 	// real network interface 필요
 	clientCmd.Flags().StringVar(&clientOpts.TunName, "tun", "tun0", "TUN device name")
-	clientCmd.Flags().StringVar(&clientOpts.TunAddrCIDR, "tun-cidr", "10.77.0.2/32", "TUN interface CIDR (client)")
 	// _ = clientCmd.MarkFlagRequired("server")  로컬 테스트를 위해서 잠시 주석처리
 }

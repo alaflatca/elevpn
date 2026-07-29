@@ -4,10 +4,12 @@ import (
 	"context"
 	"elevpn/internal/protocol"
 	"elevpn/internal/tun"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 )
 
 var ErrDropPacket = errors.New("drop packet")
@@ -18,10 +20,21 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 		return err
 	}
 
+	tunnelIP, err := s.allocateTunnelIP(peer.id)
+	if err != nil {
+		return err
+	}
+	if err := s.peers.setTunnelIP(peer.id, tunnelIP); err != nil {
+		return err
+	}
+
+	ip4 := tunnelIP.As4()
+	payload := ip4[:]
+
 	msg := &protocol.Message{
-		Type:   protocol.MessageTypeWelcome,
-		PeerID: peer.id,
-		// Payload: , // 나중에 tunnel IP 포함
+		Type:    protocol.MessageTypeWelcome,
+		PeerID:  peer.id,
+		Payload: payload, // 나중에 payload가 많아지면 offset 별로 정리해서 데이터 추가
 	}
 
 	welcomePacket, err := protocol.Encode(msg)
@@ -39,6 +52,53 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 	}
 
 	return nil
+}
+
+func (s *Server) allocateTunnelIP(peerID uint64) (netip.Addr, error) {
+	_, ipnet, err := net.ParseCIDR(s.cfg.VPNNetworkCIDR)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if ipnet.IP.To4() == nil {
+		return netip.Addr{}, fmt.Errorf("invalid ipv4")
+	}
+
+	ones, _ := ipnet.Mask.Size()
+	if !validIPRange(peerID, ones) {
+		return netip.Addr{}, fmt.Errorf("invalid ip range: peerID=%d prefix=%d", peerID, ones)
+	}
+
+	vpnNetworkBase := binary.BigEndian.Uint32(ipnet.IP.To4())
+	tunnelIPUint := vpnNetworkBase + 1 + uint32(peerID)
+
+	var tunnelAddr [4]byte
+	binary.BigEndian.PutUint32(tunnelAddr[:], tunnelIPUint)
+	tunnelIP := netip.AddrFrom4(tunnelAddr)
+
+	if !tunnelIP.Is4() {
+		return netip.Addr{}, fmt.Errorf("tunnel ip is not ipv4")
+	}
+
+	return tunnelIP, nil
+}
+
+func validIPRange(peerID uint64, prefix int) bool {
+	if peerID == 0 {
+		return false
+	}
+	if prefix < 0 || prefix > 30 {
+		return false
+	}
+
+	hostBits := 32 - prefix //prefix 24 --> 32-24 = 8
+	total := 1 << hostBits  // 1 << 8 ---> 256
+	maxPeerID := total - 3  // 253 ---> base(0) + 1 + 253 --> 최대 254
+
+	if peerID > uint64(maxPeerID) {
+		return false
+	}
+
+	return true
 }
 
 func (s *Server) handleKeepalive() error {

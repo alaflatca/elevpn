@@ -27,6 +27,28 @@ type ServerConfig struct {
 }
 
 func (s *ServerConfig) normalize() error {
+	_, ipnet, err := net.ParseCIDR(s.VPNNetworkCIDR)
+	if err != nil {
+		return err
+	}
+
+	ones, bits := ipnet.Mask.Size()
+	if bits != 32 {
+		return fmt.Errorf("vpn network cidr must be IPv4: cidr=%q bits=%d", s.VPNNetworkCIDR, bits)
+	}
+	if ones > 30 {
+		return fmt.Errorf("vpn network cidr is too small: cidr=%q prefix=%d; need /30 or larger network", s.VPNNetworkCIDR, ones)
+	}
+
+	ip4 := ipnet.IP.To4()
+	networkAddr := binary.BigEndian.Uint32(ip4)
+	serverAddr := networkAddr + 1
+
+	var serverIPBytes [4]byte
+	binary.BigEndian.PutUint32(serverIPBytes[:], serverAddr)
+	tunAddr := netip.AddrFrom4(serverIPBytes)
+	s.TunAddrCIDR = fmt.Sprintf("%s/%d", tunAddr.String(), ones)
+
 	return nil
 }
 
@@ -37,6 +59,10 @@ type Server struct {
 }
 
 func New(cfg ServerConfig) (*Server, error) {
+	if err := cfg.normalize(); err != nil {
+		return nil, fmt.Errorf("failed to normalize server config: %v", err)
+	}
+
 	return &Server{cfg: cfg, peers: newPeerStore()}, nil
 }
 
@@ -130,25 +156,34 @@ func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDP
 		}
 
 		if n > 0 {
-			message, err := protocol.Decode(buf[:n])
+			destIPv4, err := extractIPv4Dst(buf[:n])
 			if err != nil {
-				log.Printf("[tunToUdp] failed to decode: %v", err)
-				continue
+				return fmt.Errorf("failed to extract ipv4 dst: %v", err)
 			}
 
-			peer, ok := s.peers.getByID(message.PeerID)
+			peer, ok := s.peers.getByTunnelIP(destIPv4)
 			if !ok {
-				return fmt.Errorf("not found peer id=%d", message.PeerID)
+				return fmt.Errorf("not found peer ip=%v", destIPv4)
 			}
 
-			written, err := conn.WriteToUDP(buf[:n], peer.addr)
+			message := &protocol.Message{
+				Type:    protocol.MessageTypeData,
+				PeerID:  peer.id,
+				Payload: buf[:n], // 이것도 따로 복사하는게 나은지
+			}
+			data, err := protocol.Encode(message)
+			if err != nil {
+				return err
+			}
+
+			written, err := conn.WriteToUDP(data, peer.addr)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
 				return err
 			}
-			if written != n {
+			if written != len(data) {
 				return io.ErrShortWrite
 			}
 		}
@@ -225,9 +260,43 @@ byte offset
 20~             Options, if IHL > 5
 */
 func extractIPv4Dst(packet []byte) (netip.Addr, error) {
-	if len(packet) != 20 {
-
+	if len(packet) < 20 {
+		return netip.Addr{}, fmt.Errorf("invalid ipv4 header length < 20")
 	}
-	destIPv4 := packet[16:19]
 
+	// 상위 4비트: IP version
+	// 하위 4비트: IHL
+	version := packet[0] >> 4
+	if version != 4 {
+		return netip.Addr{}, fmt.Errorf("invalid ipv4 version: %v", version)
+	}
+
+	ihl := packet[0] & 0x0F
+	if ihl < 5 {
+		return netip.Addr{}, fmt.Errorf("invalid ihl: %v", ihl)
+	}
+	headerLen := int(ihl) * 4
+	if len(packet) < headerLen {
+		return netip.Addr{}, fmt.Errorf("invalid ipv4 header length: packet len=%d header len=%d", len(packet), int(ihl)*4)
+	}
+
+	totalLen := binary.BigEndian.Uint16(packet[2:4])
+	if totalLen < uint16(headerLen) {
+		return netip.Addr{}, fmt.Errorf("invalid ipv4 total length: total len=%d header len=%d", totalLen, headerLen)
+	}
+	if len(packet) < int(totalLen) {
+		return netip.Addr{}, fmt.Errorf("truncated ipv4 packet: packet len=%d total len=%d", len(packet), totalLen)
+	}
+
+	/*
+		header len = IPv4 헤더 길이
+		total len  = IPv4 패킷 전체 길이
+		packet len = 실제로 함수에 들어온 버퍼 길이
+	*/
+
+	var dst [4]byte
+	copy(dst[:], packet[16:20])
+	addr := netip.AddrFrom4(dst)
+
+	return addr, nil
 }

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
@@ -55,12 +56,24 @@ func New(cfg ClientConfig) (*Client, error) {
 }
 
 func (c *Client) Run(ctx context.Context) error {
-	routeInfo, err := netlink.GetDefaultRoute()
+	conn, err := c.DialUDP(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	result, err := c.handshake(ctx, conn)
 	if err != nil {
 		return err
 	}
 
-	tunDevice, err := tun.New(c.cfg.TunName, c.cfg.TunAddrCIDR)
+	clientTunCIDR := result.tunnelIP.String() + "/32"
+	tunDevice, err := tun.New(c.cfg.TunName, clientTunCIDR)
+	if err != nil {
+		return err
+	}
+
+	routeInfo, err := netlink.GetDefaultRoute()
 	if err != nil {
 		return err
 	}
@@ -87,18 +100,7 @@ func (c *Client) Run(ctx context.Context) error {
 		return err
 	}
 
-	conn, err := c.DialUDP(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	peerID, err := c.handshake(ctx, conn)
-	if err != nil {
-		return err
-	}
-
-	return c.runTunnel(ctx, tunDevice, conn, peerID)
+	return c.runTunnel(ctx, tunDevice, conn, result.peerID)
 }
 
 func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, peerID uint64) error {
@@ -155,35 +157,52 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	return err
 }
 
+type handshakeResult struct {
+	peerID   uint64
+	tunnelIP netip.Addr
+}
+
 // context 처리
-func (c *Client) handshake(ctx context.Context, conn *net.UDPConn) (uint64, error) {
+func (c *Client) handshake(ctx context.Context, conn *net.UDPConn) (handshakeResult, error) {
 	m := &protocol.Message{
 		Type: protocol.MessageTypeAloha,
 	}
 	packet, err := protocol.Encode(m)
 	if err != nil {
-		return 0, err
+		return handshakeResult{}, err
 	}
 	_, err = conn.Write(packet)
 	if err != nil {
-		return 0, err
+		return handshakeResult{}, err
 	}
 
 	recvBuf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize)
 	n, err := conn.Read(recvBuf)
 	if err != nil {
-		return 0, err
+		return handshakeResult{}, err
 	}
 
 	message, err := protocol.Decode(recvBuf[:n])
 	if err != nil {
-		return 0, err
+		return handshakeResult{}, err
 	}
 	if message.Type != protocol.MessageTypeWelcome {
-		return 0, fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeWelcome, message.Type)
+		return handshakeResult{}, fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeWelcome, message.Type)
 	}
 
-	return message.PeerID, nil
+	if len(message.Payload) != 4 { // 4바이트 인지 확인
+		return handshakeResult{}, fmt.Errorf("invalid payload length: expected=%d actual=%d", 4, len(message.Payload))
+	}
+
+	var ipv4 [4]byte
+	copy(ipv4[:], message.Payload)
+
+	result := handshakeResult{
+		peerID:   message.PeerID,
+		tunnelIP: netip.AddrFrom4(ipv4),
+	}
+
+	return result, nil
 }
 
 func tunToUdp(ctx context.Context, sess *tunnelSession) error {
