@@ -26,7 +26,7 @@ func GetDefaultRoute() (DefaultRoute, error) {
 	if err != nil {
 		return DefaultRoute{}, err
 	}
-	fmt.Printf("[server] default route info\n index: %d\n name: %q\n gateway: %q\n", defaultRoute.InterfaceIndex, defaultRoute.InterfaceName, defaultRoute.Gateway.String())
+	log.Printf("[route] default interface=%s index=%d gateway=%q", defaultRoute.InterfaceName, defaultRoute.InterfaceIndex, defaultRoute.Gateway.String())
 
 	return defaultRoute, nil
 }
@@ -139,8 +139,6 @@ func recvDefaultRoute(fd int, want uint32) (DefaultRoute, error) {
 							log.Printf("invalid interface by index: %v", ifindex)
 							continue
 						}
-						log.Printf("found external interface : %+v", ifr) // 아직 정확히 external interface 를 찾은게 아님 따로 구별 하는 로직이있어야함 임시
-
 						defaultRoute.InterfaceIndex = ifr.Index
 						defaultRoute.InterfaceName = ifr.Name
 					}

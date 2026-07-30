@@ -27,7 +27,6 @@ type ClientConfig struct {
 	ServerEndpoint  string
 	ServerRouteIP   string
 	TunName         string
-	TunAddrCIDR     string
 	ServerRouteCIDR string
 }
 
@@ -68,7 +67,7 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 
 	clientTunCIDR := result.tunnelIP.String() + "/32"
-	tunDevice, err := tun.New(c.cfg.TunName, clientTunCIDR)
+	tunDevice, err := tun.New(c.cfg.TunName, clientTunCIDR, result.mtu)
 	if err != nil {
 		return err
 	}
@@ -160,6 +159,7 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 type handshakeResult struct {
 	peerID   uint64
 	tunnelIP netip.Addr
+	mtu      uint16
 }
 
 // context 처리
@@ -175,6 +175,7 @@ func (c *Client) handshake(ctx context.Context, conn *net.UDPConn) (handshakeRes
 	if err != nil {
 		return handshakeResult{}, err
 	}
+	log.Printf("[handshake] sent ALOHA to %s", conn.RemoteAddr().String())
 
 	recvBuf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize)
 	n, err := conn.Read(recvBuf)
@@ -189,18 +190,22 @@ func (c *Client) handshake(ctx context.Context, conn *net.UDPConn) (handshakeRes
 	if message.Type != protocol.MessageTypeWelcome {
 		return handshakeResult{}, fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeWelcome, message.Type)
 	}
-
-	if len(message.Payload) != 4 { // 4바이트 인지 확인
-		return handshakeResult{}, fmt.Errorf("invalid payload length: expected=%d actual=%d", 4, len(message.Payload))
+	if len(message.Payload) != 6 { // 4바이트 인지 확인
+		return handshakeResult{}, fmt.Errorf("invalid payload length: expected=%d actual=%d", 6, len(message.Payload))
 	}
 
+	// 추후 페이로드가 늘어나면 그때 payloadEncode, Decode 추가
 	var ipv4 [4]byte
-	copy(ipv4[:], message.Payload)
+	copy(ipv4[:], message.Payload[0:4])
+
+	mtu := binary.BigEndian.Uint16(message.Payload[4:6])
 
 	result := handshakeResult{
 		peerID:   message.PeerID,
 		tunnelIP: netip.AddrFrom4(ipv4),
+		mtu:      mtu,
 	}
+	log.Printf("[handshake] received WELCOME peer_id=%d tunnel_ip=%s mtu=%d", result.peerID, result.tunnelIP.String(), result.mtu)
 
 	return result, nil
 }

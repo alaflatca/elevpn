@@ -35,7 +35,8 @@ const (
 	peerID			8byte
 	*/
 
-	MaxPayloadSize = 1460
+	MaxPayloadSize          = 1460
+	DefaultTunnelMTU uint16 = 1460
 )
 
 type Message struct {

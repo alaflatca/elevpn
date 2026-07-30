@@ -16,12 +16,13 @@ import (
 type Tun struct {
 	name       string
 	cidr       string
+	mtu        uint16
 	actualName string
 
 	f *os.File
 }
 
-func New(name string, cidr string) (*Tun, error) {
+func New(name string, cidr string, mtu uint16) (*Tun, error) {
 	if name == "" {
 		return nil, fmt.Errorf("tun name is empty")
 	}
@@ -33,7 +34,7 @@ func New(name string, cidr string) (*Tun, error) {
 		return nil, fmt.Errorf("tun cidr must be IPv4: %q", cidr)
 	}
 
-	return &Tun{name: name, cidr: cidr}, nil
+	return &Tun{name: name, cidr: cidr, mtu: mtu}, nil
 }
 
 func (t *Tun) Apply() error {
@@ -41,7 +42,11 @@ func (t *Tun) Apply() error {
 		return err
 	}
 
-	if err := t.setIPv4CIDR(t.cidr); err != nil {
+	if err := t.setMTU(); err != nil {
+		return err
+	}
+
+	if err := t.setIPv4CIDR(); err != nil {
 		return err
 	}
 
@@ -96,24 +101,9 @@ func (t *Tun) create() error {
 	return nil
 }
 
-func (t *Tun) setIPv4CIDR(cidr string) error {
+func (t *Tun) setMTU() error {
 	if t == nil || t.f == nil {
 		return fmt.Errorf("nil device")
-	}
-
-	ip, ipnet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return fmt.Errorf("parse cidr %q: %w", cidr, err)
-	}
-
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return fmt.Errorf("only IPv4 CIDR is supported: %q", cidr)
-	}
-
-	mask4 := net.IP(ipnet.Mask).To4()
-	if mask4 == nil {
-		return fmt.Errorf("invalid IPv4 mask in CIDR: %q", cidr)
 	}
 
 	sock, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
@@ -121,6 +111,59 @@ func (t *Tun) setIPv4CIDR(cidr string) error {
 		return fmt.Errorf("socket(AF_INET, SOCK_DGRAM): %w", err)
 	}
 	defer unix.Close(sock)
+
+	/* unix.SIOCSIF ADDR, NETMASK, MTU
+	SIOC  = Socket I/O Control
+	S     = Set
+	IF    = Interface
+	MTU   = Maximum Transmission Unit
+	*/
+
+	ifr, err := unix.NewIfreq(t.name)
+	if err != nil {
+		return fmt.Errorf("new ifreq(mtu): %w", err)
+	}
+	ifr.SetUint32(uint32(t.mtu))
+
+	if err := unix.IoctlIfreq(sock, unix.SIOCSIFMTU, ifr); err != nil {
+		return fmt.Errorf("ioctl(SIOCSIFMTU): %w", err)
+	}
+
+	return nil
+}
+
+func (t *Tun) setIPv4CIDR() error {
+	if t == nil || t.f == nil {
+		return fmt.Errorf("nil device")
+	}
+
+	ip, ipnet, err := net.ParseCIDR(t.cidr)
+	if err != nil {
+		return fmt.Errorf("parse cidr %q: %w", t.cidr, err)
+	}
+
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return fmt.Errorf("only IPv4 CIDR is supported: %q", t.cidr)
+	}
+
+	mask4 := net.IP(ipnet.Mask).To4()
+	if mask4 == nil {
+		return fmt.Errorf("invalid IPv4 mask in CIDR: %q", t.cidr)
+	}
+
+	sock, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return fmt.Errorf("socket(AF_INET, SOCK_DGRAM): %w", err)
+	}
+	defer unix.Close(sock)
+
+	/* unix.SIOCSIF ADDR, NETMASK, MTU
+	SIOC  = Socket I/O Control
+	S     = Set
+	IF    = Interface
+	MTU   = Maximum Transmission Unit
+	*/
 
 	// TUN 인터페이스에 IPv4 추가
 	ifr, err := unix.NewIfreq(t.name)

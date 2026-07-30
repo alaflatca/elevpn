@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/netip"
 )
@@ -15,10 +16,18 @@ import (
 var ErrDropPacket = errors.New("drop packet")
 
 func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
+	if conn == nil {
+		return errors.New("conn is nil")
+	}
+	if peerAddr == nil {
+		return errors.New("peerAddr is nil")
+	}
+
 	peer, err := s.peers.register(peerAddr)
 	if err != nil {
 		return err
 	}
+	log.Printf("[handshake] received ALOHA from %s", peerAddr.String())
 
 	tunnelIP, err := s.allocateTunnelIP(peer.id)
 	if err != nil {
@@ -27,14 +36,19 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 	if err := s.peers.setTunnelIP(peer.id, tunnelIP); err != nil {
 		return err
 	}
+	log.Printf("[handshake] registered peer id=%d tunnel_ip=%s mtu=%d", peer.id, tunnelIP.String(), protocol.DefaultTunnelMTU)
 
+	var payload [6]byte
 	ip4 := tunnelIP.As4()
-	payload := ip4[:]
+	copy(payload[0:4], ip4[:])
+	binary.BigEndian.PutUint16(payload[4:6], protocol.DefaultTunnelMTU)
 
 	msg := &protocol.Message{
 		Type:    protocol.MessageTypeWelcome,
 		PeerID:  peer.id,
-		Payload: payload, // 나중에 payload가 많아지면 offset 별로 정리해서 데이터 추가
+		Payload: payload[:], // 나중에 payload가 많아지면 offset 별로 정리해서 데이터 추가
+		// 0:4, tunnel IP
+		// 4:5, mtu
 	}
 
 	welcomePacket, err := protocol.Encode(msg)
@@ -50,6 +64,7 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 	if written != len(welcomePacket) {
 		return io.ErrShortWrite
 	}
+	log.Printf("[handshake] sent WELCOME peer_id=%d tunnel_ip=%s mtu=%d", peer.id, tunnelIP.String(), protocol.DefaultTunnelMTU)
 
 	return nil
 }

@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"elevpn/internal/client"
-	"fmt"
+	"log"
 
 	"github.com/spf13/cobra"
 )
@@ -20,11 +20,9 @@ var clientCmd = &cobra.Command{
 	Short: "Run elevpn in client mode",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if verbose {
-			fmt.Println("[client] verbose enabled")
+			log.Println("[init] verbose enabled")
 		}
-		fmt.Printf("[client] init\n listen=%s\n endpoint=%s\n tunName=%s\n\n",
-			clientOpts.ListenAddr, clientOpts.ServerEndpoint, clientOpts.TunName,
-		)
+		log.Printf("[init] listen=%s endpoint=%s tunName=%s", clientOpts.ListenAddr, clientOpts.ServerEndpoint, clientOpts.TunName)
 
 		cli, err := client.New(client.ClientConfig{
 			ListenAddr:     clientOpts.ListenAddr,

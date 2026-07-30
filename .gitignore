@@ -16,3 +16,5 @@ infra/terraform/*.tfplan
 # 크래시 로그
 infra/terraform/crash.log
 infra/terraform/crash.*.log
+
+readyme.txt

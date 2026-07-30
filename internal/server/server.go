@@ -72,7 +72,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	tunDevice, err := tun.New(s.cfg.TunName, s.cfg.TunAddrCIDR)
+	tunDevice, err := tun.New(s.cfg.TunName, s.cfg.TunAddrCIDR, protocol.DefaultTunnelMTU)
 	if err != nil {
 		return err
 	}
@@ -126,14 +126,14 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	})
 
 	errGroup.Go(func() error {
-		if err := s.tunToUdp(errCtx, tunDevice, conn, eventFd); err != nil {
-			return fmt.Errorf("failed to TUN To UDP: %w", err)
+		if err := s.udpToTun(errCtx, conn, tunDevice); err != nil {
+			return fmt.Errorf("failed to UDP to TUN: %w", err)
 		}
 		return nil
 	})
 	errGroup.Go(func() error {
-		if err := s.udpToTun(errCtx, conn, tunDevice); err != nil {
-			return fmt.Errorf("failed to UDP to TUN: %w", err)
+		if err := s.tunToUdp(errCtx, tunDevice, conn, eventFd); err != nil {
+			return fmt.Errorf("failed to TUN To UDP: %w", err)
 		}
 		return nil
 	})
@@ -145,49 +145,6 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	}
 
 	return err
-}
-
-func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, eventFd int) error {
-	buf := make([]byte, protocol.MaxPayloadSize)
-	for {
-		n, err := tunDevice.ReadContext(ctx, buf, eventFd)
-		if err != nil {
-			return err
-		}
-
-		if n > 0 {
-			destIPv4, err := extractIPv4Dst(buf[:n])
-			if err != nil {
-				return fmt.Errorf("failed to extract ipv4 dst: %v", err)
-			}
-
-			peer, ok := s.peers.getByTunnelIP(destIPv4)
-			if !ok {
-				return fmt.Errorf("not found peer ip=%v", destIPv4)
-			}
-
-			message := &protocol.Message{
-				Type:    protocol.MessageTypeData,
-				PeerID:  peer.id,
-				Payload: buf[:n], // 이것도 따로 복사하는게 나은지
-			}
-			data, err := protocol.Encode(message)
-			if err != nil {
-				return err
-			}
-
-			written, err := conn.WriteToUDP(data, peer.addr)
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				return err
-			}
-			if written != len(data) {
-				return io.ErrShortWrite
-			}
-		}
-	}
 }
 
 func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error {
@@ -226,6 +183,53 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 			}
 			return err
 		}
+	}
+}
+
+func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, eventFd int) error {
+	buf := make([]byte, protocol.MaxPayloadSize)
+	for {
+		n, err := tunDevice.ReadContext(ctx, buf, eventFd)
+		if err != nil {
+			return err
+		}
+
+		if n > 0 {
+			destIPv4, err := extractIPv4Dst(buf[:n])
+			if err != nil {
+				if errors.Is(err, ErrDropPacket) {
+					continue
+				}
+				return fmt.Errorf("failed to extract ipv4 dst: %v", err)
+			}
+
+			peer, ok := s.peers.getByTunnelIP(destIPv4)
+			if !ok {
+				return fmt.Errorf("not found peer ip=%v", destIPv4)
+			}
+
+			message := &protocol.Message{
+				Type:    protocol.MessageTypeData,
+				PeerID:  peer.id,
+				Payload: buf[:n], // 이것도 따로 복사하는게 나은지
+			}
+			data, err := protocol.Encode(message)
+			if err != nil {
+				return err
+			}
+
+			written, err := conn.WriteToUDP(data, peer.addr)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			if written != len(data) {
+				return io.ErrShortWrite
+			}
+		}
+
 	}
 }
 
@@ -268,7 +272,7 @@ func extractIPv4Dst(packet []byte) (netip.Addr, error) {
 	// 하위 4비트: IHL
 	version := packet[0] >> 4
 	if version != 4 {
-		return netip.Addr{}, fmt.Errorf("invalid ipv4 version: %v", version)
+		return netip.Addr{}, fmt.Errorf("unsupported ip version=%d: %w", version, ErrDropPacket)
 	}
 
 	ihl := packet[0] & 0x0F

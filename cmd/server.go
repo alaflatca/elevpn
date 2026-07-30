@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"elevpn/internal/server"
-	"fmt"
+	"log"
 
 	"github.com/spf13/cobra"
 )
@@ -10,7 +10,6 @@ import (
 type serverOptions struct {
 	ListenAddr     string
 	TunName        string
-	TunAddrCIDR    string
 	VPNNetworkCIDR string
 }
 
@@ -21,9 +20,9 @@ var serverCmd = &cobra.Command{
 	Short: "Run elevpn in server mode",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if verbose {
-			fmt.Println("[server] verbose enabled")
+			log.Println("[init] verbose enabled")
 		}
-		fmt.Printf("[server] init\n listen=%s\n tun-name=%s\n tun-addr-cidr=%s\n vpn-network-cidr=%s\n\n", serverOpts.ListenAddr, serverOpts.TunName, serverOpts.TunAddrCIDR, serverOpts.VPNNetworkCIDR)
+		log.Printf("[init] listen=%s tun-name=%s vpn-network-cidr=%s", serverOpts.ListenAddr, serverOpts.TunName, serverOpts.VPNNetworkCIDR)
 
 		svr, err := server.New(server.ServerConfig{
 			ListenAddr:     serverOpts.ListenAddr,
