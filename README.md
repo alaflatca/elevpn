@@ -1,48 +1,48 @@
 # elevpn
 
-Language: English | [한국어](./README.ko.md)
+언어: 한국어 | [English](./README.en.md)
 
-elevpn is a small TUN-over-UDP VPN prototype written in Go.
+elevpn은 Go로 작성한 작은 TUN-over-UDP VPN 프로토타입입니다.
 
-It creates a Linux TUN interface, wraps IPv4 packets in a simple UDP protocol, sends them to a VPN server, and uses IP forwarding plus nftables masquerade on the server side so client traffic can leave through the server's public network.
+Linux TUN 인터페이스를 만들고, TUN에서 읽은 IPv4 패킷을 자체 UDP 프로토콜로 감싼 뒤 VPN 서버로 보냅니다. 서버는 IP forwarding과 nftables masquerade를 사용해서 클라이언트 트래픽이 서버의 공인 네트워크를 통해 나가도록 처리합니다.
 
-This project is not a production VPN. The current goal is to understand and implement the core data path directly:
+이 프로젝트는 production VPN이 아닙니다. 목적은 VPN의 핵심 데이터 경로를 직접 구현하고 이해하는 것입니다.
 
-- TUN device setup
+- TUN device 설정
 - UDP tunnel transport
 - client/server handshake
-- peer registration
-- route switching
+- peer 등록
+- route 변경
 - nftables masquerade
 - graceful cleanup
 
-## Current Status
+## 현재 상태
 
-The current MVP can route client traffic through the server.
+현재 MVP는 클라이언트 트래픽을 서버를 통해 외부로 내보낼 수 있습니다.
 
-In the test below, the client EC2 instance public IP was:
+아래 테스트에서 클라이언트 EC2의 공인 IP는 다음과 같습니다.
 
 ```text
 43.203.156.141
 ```
 
-The VPN server EC2 instance public IP was:
+VPN 서버 EC2의 공인 IP는 다음과 같습니다.
 
 ```text
 15.165.48.135
 ```
 
-After routing traffic through `tun0`, `api.ipify.org` returned the server public IP:
+트래픽을 `tun0`로 보낸 뒤 `api.ipify.org`를 호출하면 서버 공인 IP가 반환됩니다.
 
 ```json
 {"ip":"15.165.48.135"}
 ```
 
-## How It Works
+## 동작 흐름
 
-The client starts by sending an `ALOHA` message to the server over UDP.
+클라이언트는 UDP로 서버에 `ALOHA` 메시지를 보냅니다.
 
-The server registers the client as a peer, allocates a tunnel IP, and sends back a `WELCOME` message.
+서버는 클라이언트를 peer로 등록하고, tunnel IP를 할당한 뒤 `WELCOME` 메시지를 응답합니다.
 
 ```text
 client
@@ -54,7 +54,7 @@ server
   -> WELCOME(peer_id, tunnel_ip, mtu)
 ```
 
-After the handshake, both sides exchange `DATA` messages.
+handshake 이후에는 양쪽이 `DATA` 메시지로 TUN 패킷을 주고받습니다.
 
 ```text
 client application traffic
@@ -68,7 +68,7 @@ client application traffic
   -> internet
 ```
 
-The return path is handled through the server TUN interface and the peer table.
+응답 패킷은 서버 TUN 인터페이스와 peer table을 통해 다시 클라이언트로 돌아갑니다.
 
 ```text
 internet response
@@ -80,9 +80,9 @@ internet response
   -> client tun0
 ```
 
-## Protocol
+## 프로토콜
 
-Every UDP packet uses a small fixed header.
+모든 UDP packet은 작은 고정 header를 사용합니다.
 
 ```text
 0      version
@@ -93,7 +93,7 @@ Every UDP packet uses a small fixed header.
 12:    payload
 ```
 
-Message types:
+message type:
 
 ```text
 1  ALOHA
@@ -112,10 +112,10 @@ Message types:
 `DATA` payload:
 
 ```text
-raw IPv4 packet read from the TUN interface
+TUN interface에서 읽은 raw IPv4 packet
 ```
 
-The current tunnel MTU is `1460`.
+현재 tunnel MTU는 `1460`입니다.
 
 ```text
 outer IPv4 header   20 bytes
@@ -127,33 +127,35 @@ overhead            40 bytes
 1500 - 40 = 1460
 ```
 
-## Build
+실제 네트워크 인터페이스 MTU가 1500일 때, VPN이 추가하는 header 크기를 고려해서 TUN MTU를 1460으로 낮춥니다.
 
-Build for Linux x86_64:
+## 빌드
+
+Linux x86_64용 빌드:
 
 ```bash
 GOOS=linux GOARCH=amd64 go build -o bin/elevpn .
 ```
 
-The program needs privileges to create TUN devices, modify routes, enable IP forwarding, and update nftables rules. The examples below use `sudo`.
+프로그램은 TUN device 생성, route 변경, IP forwarding 설정, nftables rule 적용을 수행하므로 권한이 필요합니다. 아래 예시는 `sudo`로 실행합니다.
 
-## Run
+## 실행
 
-Server:
+서버:
 
 ```bash
 sudo ./elevpn server
 ```
 
-Client:
+클라이언트:
 
 ```bash
 sudo ./elevpn client --server-endpoint=15.165.48.135:9010
 ```
 
-## Test Run
+## 테스트 실행 로그
 
-Server log:
+서버 로그:
 
 ```text
 [ec2-user@ip-172-31-60-244 ~]$ sudo ./elevpn server
@@ -164,7 +166,7 @@ Server log:
 2026/07/30 08:49:53 [handshake] sent WELCOME peer_id=1 tunnel_ip=10.77.0.2 mtu=1460
 ```
 
-Client log:
+클라이언트 로그:
 
 ```text
 [ec2-user@ip-172-31-50-196 ~]$ sudo ./elevpn client --server-endpoint=15.165.48.135:9010
@@ -174,9 +176,9 @@ Client log:
 2026/07/30 08:49:53 [route] default interface=ens5 index=2 gateway="172.31.48.1"
 ```
 
-## Interface State
+## 인터페이스 상태
 
-Server TUN interface:
+서버 TUN 인터페이스:
 
 ```text
 [ec2-user@ip-172-31-60-244 ~]$ ip addr show tun0
@@ -188,7 +190,7 @@ Server TUN interface:
        valid_lft forever preferred_lft forever
 ```
 
-Client TUN interface:
+클라이언트 TUN 인터페이스:
 
 ```text
 [ec2-user@ip-172-31-50-196 ~]$ ip addr show tun0
@@ -200,9 +202,9 @@ Client TUN interface:
        valid_lft forever preferred_lft forever
 ```
 
-## Route State
+## 라우트 상태
 
-Server routes:
+서버 라우트:
 
 ```text
 [ec2-user@ip-172-31-60-244 ~]$ ip route show
@@ -213,7 +215,7 @@ default via 172.31.48.1 dev ens5 proto dhcp src 172.31.60.244 metric 512
 172.31.48.1 dev ens5 proto dhcp scope link src 172.31.60.244 metric 512
 ```
 
-Client routes:
+클라이언트 라우트:
 
 ```text
 [ec2-user@ip-172-31-50-196 ~]$ ip route show
@@ -225,17 +227,17 @@ default via 172.31.48.1 dev ens5 proto dhcp src 172.31.50.196 metric 512
 172.31.48.1 dev ens5 proto dhcp scope link src 172.31.50.196 metric 512
 ```
 
-The server endpoint route is kept outside the tunnel:
+VPN 서버 endpoint로 가는 route는 tunnel 밖으로 유지합니다.
 
 ```text
 15.165.48.135 via 172.31.48.1 dev ens5 proto static
 ```
 
-That route keeps the UDP tunnel itself reachable even when selected traffic is sent through `tun0`.
+이 예외 route가 있어야 default route나 테스트 route가 `tun0`를 사용하더라도 UDP tunnel 자체가 끊기지 않습니다.
 
 ## NAT Rule
 
-On the server, elevpn creates an nftables masquerade rule for the VPN network.
+서버는 VPN network에 대해 nftables masquerade rule을 생성합니다.
 
 ```text
 [ec2-user@ip-172-31-60-244 ~]$ sudo nft list ruleset
@@ -247,33 +249,33 @@ table ip vpnnat {
 }
 ```
 
-This means packets from the VPN network are rewritten to use the server's external interface when they leave through `ens5`.
+이 rule은 `10.77.0.0/24`에서 나온 패킷이 `ens5`를 통해 외부로 나갈 때 서버 외부 인터페이스 주소로 masquerade되도록 합니다.
 
-## External IP Test
+## 외부 IP 테스트
 
-For the test, only one external IP was routed through `tun0`.
+테스트에서는 특정 외부 IP 하나만 `tun0`로 보냈습니다.
 
 ```bash
 sudo ip route add 104.26.13.205/32 dev tun0
 ```
 
-Then `curl` was forced to use that IP for `api.ipify.org`.
+그리고 `api.ipify.org` 요청이 해당 IP로 가도록 `curl --resolve`를 사용했습니다.
 
 ```bash
 curl -s --resolve api.ipify.org:443:104.26.13.205 https://api.ipify.org?format=json
 ```
 
-Result:
+결과:
 
 ```json
 {"ip":"15.165.48.135"}
 ```
 
-The returned IP is the VPN server public IP, so the request went through the tunnel and exited from the server.
+응답 IP가 VPN 서버의 공인 IP이므로, 클라이언트 요청이 tunnel을 거쳐 서버에서 외부로 나갔음을 확인할 수 있습니다.
 
 ## Cleanup
 
-Client shutdown:
+클라이언트 종료:
 
 ```text
 Ctrl+C
@@ -286,7 +288,7 @@ Ctrl+C
 2026/07/30 09:07:59 uptime: 18m6.154593862s
 ```
 
-Server shutdown:
+서버 종료:
 
 ```text
 Ctrl+C
@@ -301,21 +303,21 @@ Ctrl+C
 2026/07/30 09:08:20 uptime: 18m31.852696443s
 ```
 
-## Notes
+## 메모
 
-Current limitations:
+현재 제한사항:
 
 - IPv4 only
-- no encryption yet
-- no authentication yet
-- peer lifecycle is minimal
-- no DNS configuration
-- no persistent config file
+- encryption 없음
+- authentication 없음
+- peer lifecycle은 최소 구현 상태
+- DNS 설정 없음
+- persistent config file 없음
 
-Next steps:
+다음 작업:
 
-- add encryption and authentication
-- introduce peer expiration and keepalive handling
-- move WELCOME payload encoding/decoding into dedicated helpers
-- add integration test scripts for EC2 or Linux network namespaces
-- improve route rollback behavior around partial failures
+- encryption과 authentication 추가
+- peer expiration과 keepalive 처리
+- WELCOME payload encode/decode helper 분리
+- EC2 또는 Linux network namespace 기반 통합 테스트 스크립트 추가
+- 부분 실패 상황에서 route rollback 동작 개선
