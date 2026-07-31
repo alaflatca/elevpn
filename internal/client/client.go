@@ -13,9 +13,15 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
+)
+
+const (
+	defaultHandshakeTimeout  = 10 * time.Second
+	defaultKeepaliveInterval = 10 * time.Second
 )
 
 type Client struct {
@@ -61,7 +67,7 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	result, err := c.handshake(ctx, conn)
+	result, err := c.handshake(conn)
 	if err != nil {
 		return err
 	}
@@ -147,6 +153,12 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 		}
 		return nil
 	})
+	errGroup.Go(func() error {
+		if err := keepAliveLoop(errCtx, session); err != nil {
+			return fmt.Errorf("failed to keep alive loop: %w", err)
+		}
+		return nil
+	})
 
 	err = errGroup.Wait()
 	if errors.Is(err, context.Canceled) {
@@ -156,6 +168,37 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	return err
 }
 
+func keepAliveLoop(ctx context.Context, sess *tunnelSession) error {
+	ticker := time.NewTicker(defaultKeepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			message := protocol.Message{
+				Type:   protocol.MessageTypeKeepalive,
+				PeerID: sess.peerID,
+			}
+			packet, err := protocol.Encode(&message)
+			if err != nil {
+				return err
+			}
+			written, err := sess.conn.Write(packet)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			if written != len(packet) {
+				return io.ErrShortWrite
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+	}
+}
+
 type handshakeResult struct {
 	peerID   uint64
 	tunnelIP netip.Addr
@@ -163,7 +206,9 @@ type handshakeResult struct {
 }
 
 // context 처리
-func (c *Client) handshake(ctx context.Context, conn *net.UDPConn) (handshakeResult, error) {
+func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
+	conn.SetWriteDeadline(time.Now().Add(defaultHandshakeTimeout))
+
 	m := &protocol.Message{
 		Type: protocol.MessageTypeAloha,
 	}
