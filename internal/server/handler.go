@@ -38,17 +38,19 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 	}
 	log.Printf("[handshake] registered peer id=%d tunnel_ip=%s mtu=%d", peer.id, tunnelIP.String(), protocol.DefaultTunnelMTU)
 
-	var payload [6]byte
-	ip4 := tunnelIP.As4()
-	copy(payload[0:4], ip4[:])
-	binary.BigEndian.PutUint16(payload[4:6], protocol.DefaultTunnelMTU)
+	welcomePayload := protocol.WelcomePayload{
+		TunnelIP: tunnelIP,
+		MTU:      protocol.DefaultTunnelMTU,
+	}
+	payload, err := protocol.EncodeWelcomePayload(welcomePayload)
+	if err != nil {
+		return err
+	}
 
 	msg := &protocol.Message{
 		Type:    protocol.MessageTypeWelcome,
 		PeerID:  peer.id,
-		Payload: payload[:], // 나중에 payload가 많아지면 offset 별로 정리해서 데이터 추가
-		// 0:4, tunnel IP
-		// 4:5, mtu
+		Payload: payload,
 	}
 
 	welcomePacket, err := protocol.Encode(msg)

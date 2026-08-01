@@ -235,20 +235,16 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 	if message.Type != protocol.MessageTypeWelcome {
 		return handshakeResult{}, fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeWelcome, message.Type)
 	}
-	if len(message.Payload) != 6 { // 4바이트 인지 확인
-		return handshakeResult{}, fmt.Errorf("invalid payload length: expected=%d actual=%d", 6, len(message.Payload))
+
+	welcomePayload, err := protocol.DecodeWelcomePayload(message.Payload)
+	if err != nil {
+		return handshakeResult{}, err
 	}
-
-	// 추후 페이로드가 늘어나면 그때 payloadEncode, Decode 추가
-	var ipv4 [4]byte
-	copy(ipv4[:], message.Payload[0:4])
-
-	mtu := binary.BigEndian.Uint16(message.Payload[4:6])
 
 	result := handshakeResult{
 		peerID:   message.PeerID,
-		tunnelIP: netip.AddrFrom4(ipv4),
-		mtu:      mtu,
+		tunnelIP: welcomePayload.TunnelIP,
+		mtu:      welcomePayload.MTU,
 	}
 	log.Printf("[handshake] received WELCOME peer_id=%d tunnel_ip=%s mtu=%d", result.peerID, result.tunnelIP.String(), result.mtu)
 
