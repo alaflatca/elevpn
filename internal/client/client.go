@@ -171,6 +171,7 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 func keepAliveLoop(ctx context.Context, sess *tunnelSession) error {
 	ticker := time.NewTicker(defaultKeepaliveInterval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
@@ -195,7 +196,6 @@ func keepAliveLoop(ctx context.Context, sess *tunnelSession) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-
 	}
 }
 

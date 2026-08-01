@@ -1,5 +1,50 @@
-월: server peer/handler/DATA 흐름 완성
-화: client-server 통합 테스트
-수: keepalive 또는 timeout 중 하나만 추가
-목: README, 구조 문서, 테스트 로그 정리
-금: 빌드/실행 방법 정리 후 제출
+남은 작업 요약
+================
+
+1. WELCOME payload encode/decode 분리
+
+    현재는 WELCOME payload의 offset을 직접 다룬다.
+    tunnel IP, MTU 같은 필드를 전용 encode/decode helper로 분리한다.
+
+
+2. peer lifecycle 정리
+
+    keepalive로 갱신되는 lastSeen을 기준으로 오래 응답 없는 peer를 제거한다.
+    peer 제거 시 byID, byTunnelIP를 함께 정리한다.
+
+    추천 구조:
+
+        server.runTunnel
+            - udpToTun
+            - tunToUdp
+            - peerLifecycle
+
+    peerLifecycle은 runTunnel의 errgroup 안에서 errCtx로 실행한다.
+    단, 개별 peer 정리 실패는 log만 남기고 계속 진행하는 편이 낫다.
+    peer lifecycle 자체의 치명적인 오류가 아니라면 tunnel 전체를 종료하지 않는다.
+
+
+3. 에러 처리 정책 정리
+
+    drop 가능한 packet과 tunnel 전체를 종료해야 하는 fatal error를 구분한다.
+    decode 실패, unknown message type, peer not found 같은 상황의 처리 기준을 정리한다.
+
+
+4. route/full-tunnel 정책 정리
+
+    server endpoint 예외 route는 유지한다.
+    전체 트래픽을 tun으로 보낼지, 특정 목적지만 tun으로 보낼지 정책을 명확히 한다.
+    SSH/SSM 접속이 끊기지 않도록 예외 route 기준도 함께 정리한다.
+
+
+5. 인증/암호화 추가
+
+    현재 UDP payload는 평문이다.
+    먼저 pre-shared key 기반 인증 또는 HMAC을 추가하고,
+    이후 AEAD 기반 암호화를 검토한다.
+
+
+6. 운영/테스트 문서 보강
+
+    실행 전 요구사항, 테스트 명령어, cleanup 확인 방법, known limitations를 정리한다.
+    가능하면 나중에 EC2 또는 Linux network namespace 기반 통합 테스트도 추가한다.

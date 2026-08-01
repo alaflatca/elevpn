@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"sync"
@@ -108,4 +109,28 @@ func (ps *peerStore) touch(id uint64) error {
 
 	p.lastSeen = time.Now()
 	return nil
+}
+
+// deleteExpired에서 예상 가능한 실패가 거의 없기 때문에 error보다 count가 더 실용적
+func (ps *peerStore) deleteExpired(now time.Time, timeout time.Duration) int {
+	ps.mutex.Lock()
+	defer ps.mutex.Unlock()
+
+	deleteCount := 0
+	for id, peer := range ps.byID {
+		if peer == nil {
+			delete(ps.byID, id)
+			deleteCount++
+
+			log.Printf("[peer] nil peer entry removed peer_id=%d", id)
+			continue
+		}
+		if now.Sub(peer.lastSeen) > timeout {
+			delete(ps.byID, id)
+			delete(ps.byTunnelIP, peer.tunnelIP)
+			deleteCount++
+		}
+	}
+
+	return deleteCount
 }

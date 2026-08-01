@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
@@ -137,6 +138,12 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 		}
 		return nil
 	})
+	errGroup.Go(func() error {
+		if err := s.expirePeersLoop(errCtx); err != nil {
+			return err
+		}
+		return nil
+	})
 
 	err = errGroup.Wait()
 	if errors.Is(err, context.Canceled) {
@@ -169,7 +176,7 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 		case protocol.MessageTypeAloha:
 			err = s.handleAloha(conn, peerAddr)
 		case protocol.MessageTypeKeepalive:
-			err = s.handleKeepalive()
+			err = s.handleKeepalive(message.PeerID)
 		case protocol.MessageTypeData:
 			err = s.handleData(ctx, tunDevice, peerAddr, *message)
 		default: // pass 하는게 나을지 로그를 찍을지? 쓸모없는 데이터를 굳이 로그를 찍어야하는지?
@@ -233,6 +240,29 @@ func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDP
 	}
 }
 
+const (
+	defaultPeerTimeout         = 30 * time.Second
+	defaultPeerCleanupInterval = 10 * time.Second
+)
+
+func (s *Server) expirePeersLoop(ctx context.Context) error {
+	ticker := time.NewTicker(defaultPeerCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			deleteCount := s.peers.deleteExpired(now, defaultPeerTimeout)
+			if deleteCount > 0 {
+				log.Printf("[peer] delete expired count=%d", deleteCount)
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 func (s *Server) ListenUDP(ctx context.Context) (*net.UDPConn, error) {
 	laddr, err := net.ResolveUDPAddr("udp", s.cfg.ListenAddr)
 	if err != nil {
@@ -240,7 +270,7 @@ func (s *Server) ListenUDP(ctx context.Context) (*net.UDPConn, error) {
 	}
 	conn, err := net.ListenUDP("udp", laddr)
 	if err != nil {
-		return nil, fmt.Errorf("binding to udp %s: %v", s.cfg.ListenAddr, err)
+		return nil, fmt.Errorf("binding to udp(%q): %v", s.cfg.ListenAddr, err)
 	}
 	return conn, nil
 }

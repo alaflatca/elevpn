@@ -116,7 +116,12 @@ func validIPRange(peerID uint64, prefix int) bool {
 	return true
 }
 
-func (s *Server) handleKeepalive() error {
+func (s *Server) handleKeepalive(peerID uint64) error {
+	if err := s.peers.touch(peerID); err != nil {
+		return err
+	}
+	log.Printf("[keepalive] peer_id=%d last_seen updated", peerID)
+
 	return nil
 }
 
