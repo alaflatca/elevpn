@@ -12,7 +12,8 @@ This project is not a production VPN. The current goal is to understand and impl
 - UDP tunnel transport
 - client/server handshake
 - peer registration
-- route switching
+- full-tunnel route switching
+- automatic bypass routes for SSH session continuity
 - nftables masquerade
 - graceful cleanup
 
@@ -32,7 +33,7 @@ The VPN server EC2 instance public IP was:
 15.165.48.135
 ```
 
-After routing traffic through `tun0`, `api.ipify.org` returned the server public IP:
+After replacing the client default route with `tun0`, `api.ipify.org` returned the server public IP:
 
 ```json
 {"ip":"15.165.48.135"}
@@ -79,6 +80,27 @@ internet response
   -> client
   -> client tun0
 ```
+
+## Route Policy
+
+The client runs in full-tunnel mode. After the VPN is connected, elevpn replaces the default route with `tun0` so regular traffic goes through the tunnel.
+
+To keep the tunnel and remote administration session alive, these destinations are bypassed through the original gateway/interface:
+
+```text
+VPN server endpoint /32
+current SSH remote IP /32
+```
+
+The SSH remote IP is detected through `NETLINK_SOCK_DIAG`/`INET_DIAG` by reading the current TCP socket table. elevpn looks for `ESTABLISHED` connections on `local port 22` and adds the remote IP as a `/32` route.
+
+```text
+15.165.48.135/32 via 172.31.48.1 dev ens5
+220.76.48.11/32 via 172.31.48.1 dev ens5
+default dev tun0
+```
+
+This keeps SSH reachable even when `sudo` drops environment variables such as `SSH_CLIENT`.
 
 ## Protocol
 
@@ -172,6 +194,7 @@ Client log:
 2026/07/30 08:49:53 [handshake] sent ALOHA to 15.165.48.135:9010
 2026/07/30 08:49:53 [handshake] received WELCOME peer_id=1 tunnel_ip=10.77.0.2 mtu=1460
 2026/07/30 08:49:53 [route] default interface=ens5 index=2 gateway="172.31.48.1"
+2026/07/30 08:49:53 [route] detected ssh bypass cidrs=[220.76.48.11/32]
 ```
 
 ## Interface State
@@ -217,21 +240,22 @@ Client routes:
 
 ```text
 [ec2-user@ip-172-31-50-196 ~]$ ip route show
-default via 172.31.48.1 dev ens5 proto dhcp src 172.31.50.196 metric 512
+default dev tun0 proto static scope link
 15.165.48.135 via 172.31.48.1 dev ens5 proto static
-104.26.13.205 dev tun0 scope link
 172.31.0.2 via 172.31.48.1 dev ens5 proto dhcp src 172.31.50.196 metric 512
 172.31.48.0/20 dev ens5 proto kernel scope link src 172.31.50.196 metric 512
 172.31.48.1 dev ens5 proto dhcp scope link src 172.31.50.196 metric 512
+220.76.48.11 via 172.31.48.1 dev ens5 proto static
 ```
 
-The server endpoint route is kept outside the tunnel:
+The VPN server endpoint and the SSH remote IP are kept outside the tunnel:
 
 ```text
 15.165.48.135 via 172.31.48.1 dev ens5 proto static
+220.76.48.11 via 172.31.48.1 dev ens5 proto static
 ```
 
-That route keeps the UDP tunnel itself reachable even when selected traffic is sent through `tun0`.
+These routes keep the UDP tunnel and SSH connection reachable even after the default route is moved to `tun0`.
 
 ## NAT Rule
 
@@ -251,16 +275,10 @@ This means packets from the VPN network are rewritten to use the server's extern
 
 ## External IP Test
 
-For the test, only one external IP was routed through `tun0`.
+After full-tunnel routing is applied, no manual test route is needed.
 
 ```bash
-sudo ip route add 104.26.13.205/32 dev tun0
-```
-
-Then `curl` was forced to use that IP for `api.ipify.org`.
-
-```bash
-curl -s --resolve api.ipify.org:443:104.26.13.205 https://api.ipify.org?format=json
+curl -s https://api.ipify.org?format=json
 ```
 
 Result:
@@ -308,14 +326,12 @@ Current limitations:
 - IPv4 only
 - no encryption yet
 - no authentication yet
-- peer lifecycle is minimal
 - no DNS configuration
 - no persistent config file
+- automatic SSH bypass currently assumes TCP local port 22
 
 Next steps:
 
 - add encryption and authentication
-- introduce peer expiration and keepalive handling
-- move WELCOME payload encoding/decoding into dedicated helpers
 - add integration test scripts for EC2 or Linux network namespaces
 - improve route rollback behavior around partial failures

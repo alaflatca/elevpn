@@ -36,24 +36,43 @@
     decode 실패, unknown message type, peer not found 같은 상황의 처리 기준을 정리한다.
 
 
+5. route/full-tunnel 정책 정리
+
+    client는 VPN server endpoint를 /32 bypass route로 먼저 추가한다.
+    현재 SSH 접속자의 공인 IP도 NETLINK_SOCK_DIAG/INET_DIAG로 탐지해 /32 bypass route로 추가한다.
+    이후 default route를 tun0로 변경해 나머지 트래픽을 tunnel로 보낸다.
+
+    적용 순서:
+
+        1. server endpoint /32 route 추가
+        2. SSH remote IP /32 route 추가
+        3. default route를 tun0로 replace
+
+    정리 순서:
+
+        1. default route를 기존 gateway/interface로 복구
+        2. bypass route 삭제
+
+    이 방식으로 sudo 실행 시 SSH_CLIENT 환경변수에 의존하지 않아도 SSH 접속을 유지할 수 있다.
+
+
 남은 작업
 ---------
 
-1. route/full-tunnel 정책 정리
-
-    server endpoint 예외 route는 유지한다.
-    전체 트래픽을 tun으로 보낼지, 특정 목적지만 tun으로 보낼지 정책을 명확히 한다.
-    SSH/SSM 접속이 끊기지 않도록 예외 route 기준도 함께 정리한다.
-
-
-2. 인증/암호화 추가
+1. 인증/암호화 추가
 
     현재 UDP payload는 평문이다.
     먼저 pre-shared key 기반 인증 또는 HMAC을 추가한다.
     이후 AEAD 기반 암호화를 검토한다.
 
 
-3. 운영/테스트 문서 보강
+2. 운영/테스트 문서 보강
 
     실행 전 요구사항, 테스트 명령어, cleanup 확인 방법, known limitations를 정리한다.
     가능하면 나중에 EC2 또는 Linux network namespace 기반 통합 테스트도 추가한다.
+
+
+3. route rollback 보강
+
+    Route.Apply 중 bypass route를 여러 개 추가하다가 중간 실패하면,
+    이미 추가된 bypass route만 내부에서 rollback하도록 보강한다.
