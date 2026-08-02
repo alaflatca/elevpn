@@ -31,7 +31,6 @@ func (m *VpnManager) ApplyAll(components ...VpnComponent) error {
 }
 
 func (m *VpnManager) Teardown() {
-	log.Println("Teardown start")
 	for i := len(m.components) - 1; i >= 0; i-- {
 		c := m.components[i]
 
@@ -41,7 +40,6 @@ func (m *VpnManager) Teardown() {
 		}
 		log.Printf("[%s] elapsed time: %s", c.Name(), time.Since(start).String())
 	}
-	log.Println("Teardown end")
 }
 
 func ExternalInterface() (netlink.DefaultRoute, error) {

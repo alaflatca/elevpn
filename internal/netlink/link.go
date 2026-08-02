@@ -33,8 +33,8 @@ func GetDefaultRoute() (DefaultRoute, error) {
 
 func getDefaultRoute(fd int) (DefaultRoute, error) {
 	rtmsg := newBaseRtmsg()
-	header := rtgen(rtmsg)
-	packet := nlMsg(1, unix.RTM_GETROUTE, unix.NLM_F_REQUEST|unix.NLM_F_DUMP, header)
+	payload := rtgen(rtmsg)
+	packet := nlMsg(1, unix.RTM_GETROUTE, unix.NLM_F_REQUEST|unix.NLM_F_DUMP, payload)
 
 	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return DefaultRoute{}, err
@@ -95,13 +95,13 @@ func recvDefaultRoute(fd int, want uint32) (DefaultRoute, error) {
 			switch msgType {
 			case unix.NLMSG_DONE: // NLM_F_DUMP ---> NLMSG_DONE(끝났음을 의미)
 				if defaultRoute.InterfaceIndex == 0 {
-					return DefaultRoute{}, fmt.Errorf("default external interface not found in routing table 'index'")
+					return DefaultRoute{}, fmt.Errorf("default interface not found in routing table 'index'")
 				}
 				if defaultRoute.InterfaceName == "" {
-					return DefaultRoute{}, fmt.Errorf("default external interface not found in routing table 'name'")
+					return DefaultRoute{}, fmt.Errorf("default interface not found in routing table 'name'")
 				}
 				if len(defaultRoute.Gateway) < 4 {
-					return DefaultRoute{}, fmt.Errorf("default external interface not found in routing table 'gateway'")
+					return DefaultRoute{}, fmt.Errorf("default interface not found in routing table 'gateway'")
 				}
 				return *defaultRoute, nil
 			case unix.NLMSG_ERROR:

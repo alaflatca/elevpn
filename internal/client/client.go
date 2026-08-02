@@ -13,8 +13,6 @@ import (
 	"log"
 	"net"
 	"net/netip"
-	"os"
-	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -62,37 +60,6 @@ func New(cfg ClientConfig) (*Client, error) {
 	return &Client{cfg: cfg}, nil
 }
 
-func detectSSHClientCIDR() (string, bool) {
-	var sshClientCIDR string
-
-	sshClient := os.Getenv("SSH_CLIENT")
-	if sshClient == "" {
-		sshConnection := os.Getenv("SSH_CONNECTION")
-		if sshConnection == "" {
-			return "", false
-		}
-		sshClientCIDR = sshConnection
-	} else {
-		sshClientCIDR = sshClient
-	}
-
-	fields := strings.Fields(sshClientCIDR)
-	if len(fields) == 0 {
-		return "", false
-	}
-
-	ip := net.ParseIP(fields[0])
-	if ip == nil {
-		return "", false
-	}
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return "", false
-	}
-
-	return ip4.String() + "/32", true
-}
-
 func (c *Client) Run(ctx context.Context) error {
 	conn, err := c.DialUDP(ctx)
 	if err != nil {
@@ -116,14 +83,19 @@ func (c *Client) Run(ctx context.Context) error {
 		return err
 	}
 
+	bypassCIDRs := []string{c.cfg.ServerRouteCIDR}
+	sshClientCIDR, ok := detectSSHClientCIDRs(22)
+	log.Printf("[route] detected ssh bypass cidrs=%v", result)
+	if ok {
+		bypassCIDRs = append(bypassCIDRs, sshClientCIDR...)
+	}
+
 	route, err := vpn.NewRoute(vpn.RouteSpec{
 		ServerRouteIP:        c.cfg.ServerRouteIP,
 		Gateway:              routeInfo.Gateway.String(),
 		GatewayInterfaceName: routeInfo.InterfaceName,
 		TunnelInterfaceName:  c.cfg.TunName,
-		BypassCIDRs: []string{
-			c.cfg.ServerRouteIP,
-		},
+		BypassCIDRs:          bypassCIDRs,
 	})
 	if err != nil {
 		return err
@@ -364,4 +336,28 @@ func (c *Client) DialUDP(ctx context.Context) (*net.UDPConn, error) {
 		return nil, fmt.Errorf("failed to dial udp: %v", err)
 	}
 	return conn, nil
+}
+
+func detectSSHClientCIDRs(port uint16) ([]string, bool) {
+	remoteIPs, err := netlink.GetEstablishedTCPRemoteIPsByLocalPort(port)
+	if err != nil {
+		return []string{}, false
+	}
+
+	result := []string{}
+	seenCIDRs := map[string]bool{}
+
+	for _, remoteIP := range remoteIPs {
+		if !remoteIP.Is4() {
+			return []string{}, false
+		}
+		cidr := remoteIP.String() + "/32"
+		if seenCIDRs[cidr] {
+			continue
+		}
+		seenCIDRs[cidr] = true
+		result = append(result, cidr)
+	}
+
+	return result, true
 }

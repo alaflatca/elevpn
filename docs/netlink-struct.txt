@@ -77,6 +77,40 @@ B. type = 24, Route Payload 구조로 읽어야됨
     [scope      (1 byte)]
     [type       (1 byte)]
     [flags      (4 byte)]
+
+B. type = 20, InetDiagMsg (72 bytes) (이 구조는 c를 무시해도됨),SOCK_DIAG_BY_FAMILY
+ InetDiagMsg Header (4 byte)
+    [Family      1 byte]
+    [State       1 byte]
+    [Timer       1 byte]
+    [Retrans     1 byte]
+ SockID (48 byte)
+    [Source Port       2 bytes]  big endian
+    [Destination Port  2 bytes]  big endian
+    [Source IPv4       4 bytes]  IPv4일 때 앞 4 bytes 사용
+    [Source Padding   12 bytes]  IPv6 자리 맞춤
+    [Destination IPv4  4 bytes]  IPv4일 때 앞 4 bytes 사용
+    [Destination Pad  12 bytes]
+    [Interface         4 bytes]
+    [Cookie            8 bytes]
+ Extra (20 byte)
+    [Expires   4 bytes]
+    [RQueue    4 bytes]
+    [WQueue    4 bytes]
+    [UID       4 bytes]
+    [Inode     4 bytes]
+
+**
+payload[0]      family
+payload[1]      state
+
+payload[4:6]    source/local port
+payload[6:8]    destination/remote port
+
+payload[8:12]   source/local IPv4
+payload[24:28]  destination/remote IPv4
+**
+
 C. Attributes
     [Attr Length (2 bytes)]
     [Attr Type   (2 bytes)]
