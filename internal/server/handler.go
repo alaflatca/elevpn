@@ -17,10 +17,10 @@ var ErrDropPacket = errors.New("drop packet")
 
 func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 	if conn == nil {
-		return errors.New("conn is nil")
+		return errors.New("udp connection is nil")
 	}
 	if peerAddr == nil {
-		return errors.New("peerAddr is nil")
+		return errors.New("peer addr is nil")
 	}
 
 	peer, err := s.peers.register(peerAddr)
@@ -42,7 +42,7 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 		TunnelIP: tunnelIP,
 		MTU:      protocol.DefaultTunnelMTU,
 	}
-	payload, err := protocol.EncodeWelcomePayload(welcomePayload)
+	welcomePayloadBytes, err := protocol.EncodeWelcomePayload(welcomePayload)
 	if err != nil {
 		return err
 	}
@@ -50,7 +50,7 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 	msg := &protocol.Message{
 		Type:    protocol.MessageTypeWelcome,
 		PeerID:  peer.id,
-		Payload: payload,
+		Payload: welcomePayloadBytes,
 	}
 
 	welcomePacket, err := protocol.Encode(msg)
@@ -120,7 +120,7 @@ func validIPRange(peerID uint64, prefix int) bool {
 
 func (s *Server) handleKeepalive(peerID uint64) error {
 	if err := s.peers.touch(peerID); err != nil {
-		return err
+		return fmt.Errorf("failed to touch keepalive peer_id=%d: %w", peerID, ErrDropPacket)
 	}
 	log.Printf("[keepalive] peer_id=%d last_seen updated", peerID)
 
@@ -161,7 +161,7 @@ func (s *Server) handleData(ctx context.Context, tun *tun.Tun, peerAddr *net.UDP
 	}
 
 	if err := s.peers.touch(peer.id); err != nil {
-		return fmt.Errorf("failed to touch peer id=%d: %v", peer.id, err)
+		return fmt.Errorf("failed to touch peer id=%d: %w", peer.id, ErrDropPacket)
 	}
 
 	return nil

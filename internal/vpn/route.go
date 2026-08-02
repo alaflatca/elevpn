@@ -12,6 +12,7 @@ type RouteSpec struct {
 	Gateway              string
 	GatewayInterfaceName string
 	TunnelInterfaceName  string
+	BypassCIDRs          []string
 }
 
 type Route struct {

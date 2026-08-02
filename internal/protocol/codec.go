@@ -49,7 +49,7 @@ func Decode(buf []byte) (*Message, error) {
 		return nil, fmt.Errorf("invalid protocol version(%d != %d)", version, ProtocolVersion)
 	}
 	if !messageType.valid() {
-		return nil, fmt.Errorf("invalid type %d", messageType)
+		return nil, fmt.Errorf("unknown message type=%d", messageType)
 	}
 
 	payload := make([]byte, payloadLen)

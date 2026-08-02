@@ -212,7 +212,7 @@ func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDP
 
 			peer, ok := s.peers.getByTunnelIP(destIPv4)
 			if !ok {
-				return fmt.Errorf("not found peer ip=%v", destIPv4)
+				return fmt.Errorf("not found peer ip=%v: %w", destIPv4, ErrDropPacket)
 			}
 
 			message := &protocol.Message{

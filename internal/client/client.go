@@ -13,6 +13,8 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -60,6 +62,37 @@ func New(cfg ClientConfig) (*Client, error) {
 	return &Client{cfg: cfg}, nil
 }
 
+func detectSSHClientCIDR() (string, bool) {
+	var sshClientCIDR string
+
+	sshClient := os.Getenv("SSH_CLIENT")
+	if sshClient == "" {
+		sshConnection := os.Getenv("SSH_CONNECTION")
+		if sshConnection == "" {
+			return "", false
+		}
+		sshClientCIDR = sshConnection
+	} else {
+		sshClientCIDR = sshClient
+	}
+
+	fields := strings.Fields(sshClientCIDR)
+	if len(fields) == 0 {
+		return "", false
+	}
+
+	ip := net.ParseIP(fields[0])
+	if ip == nil {
+		return "", false
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return "", false
+	}
+
+	return ip4.String() + "/32", true
+}
+
 func (c *Client) Run(ctx context.Context) error {
 	conn, err := c.DialUDP(ctx)
 	if err != nil {
@@ -88,6 +121,9 @@ func (c *Client) Run(ctx context.Context) error {
 		Gateway:              routeInfo.Gateway.String(),
 		GatewayInterfaceName: routeInfo.InterfaceName,
 		TunnelInterfaceName:  c.cfg.TunName,
+		BypassCIDRs: []string{
+			c.cfg.ServerRouteIP,
+		},
 	})
 	if err != nil {
 		return err
@@ -140,16 +176,15 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 			log.Printf("failed to udp close: %v", err)
 		}
 	})
-
 	errGroup.Go(func() error {
-		if err := tunToUdp(errCtx, session); err != nil {
-			return fmt.Errorf("failed to TUN To UDP: %w", err)
+		if err := udpToTun(errCtx, session); err != nil {
+			return fmt.Errorf("failed to UDP to TUN: %w", err)
 		}
 		return nil
 	})
 	errGroup.Go(func() error {
-		if err := udpToTun(errCtx, session); err != nil {
-			return fmt.Errorf("failed to UDP to TUN: %w", err)
+		if err := tunToUdp(errCtx, session); err != nil {
+			return fmt.Errorf("failed to TUN To UDP: %w", err)
 		}
 		return nil
 	})
@@ -208,6 +243,7 @@ type handshakeResult struct {
 // context 처리
 func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 	conn.SetWriteDeadline(time.Now().Add(defaultHandshakeTimeout))
+	defer conn.SetWriteDeadline(time.Time{})
 
 	m := &protocol.Message{
 		Type: protocol.MessageTypeAloha,
