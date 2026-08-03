@@ -56,36 +56,45 @@
     이 방식으로 sudo 실행 시 SSH_CLIENT 환경변수에 의존하지 않아도 SSH 접속을 유지할 수 있다.
 
 
+6. PSK/HMAC 기반 인증/무결성 검증
+
+    client/server config에 PSK를 추가하고 내부 AuthKey로 변환한다.
+    UDP로 송수신되는 elevpn packet은 EncodePacket/DecodePacket을 사용한다.
+    HMAC-SHA256 tag는 message header + payload 전체를 기준으로 계산한다.
+    수신 측은 같은 PSK로 tag를 다시 계산해 인증과 무결성을 검증한다.
+
+    현재 packet 구조:
+
+        [header 12bytes][payload variable][hmac tag 32bytes]
+
+    단, 이 단계는 암호화가 아니므로 payload 내용은 여전히 평문이다.
+    정리 내용은 docs/authentication.txt에 따로 기록했다.
+
+
 남은 작업
 ---------
 
-1. 인증/암호화 추가
+1. 암호화와 replay 방지 보강
 
-    현재 UDP payload는 평문이다.
-    보안 구조는 학습과 구현 난이도를 고려해 단계적으로 추가한다.
+    현재 UDP packet은 PSK/HMAC으로 인증과 무결성은 검증하지만,
+    payload 자체는 아직 평문이다.
 
     진행 순서:
 
-        1. PSK(pre-shared key) 설정 추가
-
-            client/server가 같은 비밀값을 공유하도록 config 구조를 잡는다.
-            PSK 자체를 네트워크로 보내지는 않는다.
-
-        2. HMAC 기반 인증/무결성 검증 추가
-
-            message header와 payload를 기준으로 HMAC tag를 만든다.
-            수신 측은 같은 PSK로 HMAC을 다시 계산해 송신자 인증과 변조 여부를 검증한다.
-            이 단계에서는 payload 내용은 여전히 평문이다.
-
-        3. sequence number 또는 nonce 추가
+        1. sequence number 또는 nonce 추가
 
             캡처한 정상 패킷을 다시 보내는 replay attack을 막기 위한 값을 message에 추가한다.
             peer별 마지막 sequence number 관리 또는 nonce 중복 검사를 검토한다.
 
-        4. AEAD 기반 암호화 검토
+        2. AEAD 기반 암호화 검토
 
             AES-GCM 또는 ChaCha20-Poly1305 같은 AEAD 방식으로 payload 암호화와 인증 tag 검증을 함께 처리한다.
             최종 구조에서는 HMAC을 별도로 유지할지, AEAD 인증 tag로 대체할지 결정한다.
+
+        3. MTU budget 재정리
+
+            HMAC tag 32bytes가 UDP payload 뒤에 추가되었으므로,
+            outer packet 크기를 기준으로 tunnel MTU와 MaxPayloadSize를 다시 검토한다.
 
 
 2. 운영/테스트 문서 보강
