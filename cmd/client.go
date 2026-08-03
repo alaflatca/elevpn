@@ -11,6 +11,7 @@ type clientOptions struct {
 	ListenAddr     string
 	ServerEndpoint string
 	TunName        string
+	PSK            string
 }
 
 var clientOpts = clientOptions{}
@@ -28,6 +29,7 @@ var clientCmd = &cobra.Command{
 			ListenAddr:     clientOpts.ListenAddr,
 			ServerEndpoint: clientOpts.ServerEndpoint,
 			TunName:        clientOpts.TunName,
+			PSK:            clientOpts.PSK,
 		})
 		if err != nil {
 			return err
@@ -44,5 +46,6 @@ func init() {
 	// default gateway 값 필요함
 	// real network interface 필요
 	clientCmd.Flags().StringVar(&clientOpts.TunName, "tun", "tun0", "TUN device name")
+	clientCmd.Flags().StringVar(&clientOpts.PSK, "psk", "test-secret", "psk field")
 	// _ = clientCmd.MarkFlagRequired("server")  로컬 테스트를 위해서 잠시 주석처리
 }

@@ -1,0 +1,179 @@
+package client
+
+import (
+	"context"
+	"elevpn/internal/protocol"
+	"elevpn/internal/tun"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
+)
+
+type tunnelSession struct {
+	tun     *tun.Tun
+	conn    *net.UDPConn
+	eventFd int
+	peerID  uint64
+	authKey []byte
+}
+
+func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, peerID uint64) error {
+	// initval, eventfd counter 초기값
+	// EFD_CLOEXEC, exec 시 fd 자동 close
+	// EFD_NONBLOCK, read/write가 block되지 않게 함
+	eventFd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
+	if err != nil {
+		return fmt.Errorf("failed to Eventfd: %v", err)
+	}
+	defer unix.Close(eventFd)
+
+	session := &tunnelSession{
+		tun:     tunDevice,
+		conn:    conn,
+		eventFd: eventFd,
+		peerID:  peerID,
+		authKey: c.cfg.AuthKey,
+	}
+
+	errGroup, errCtx := errgroup.WithContext(ctx)
+
+	context.AfterFunc(errCtx, func() {
+		// eventFd에 1증가 write
+		var eventBuf [8]byte
+		binary.NativeEndian.PutUint64(eventBuf[:], 1)
+		if _, err := unix.Write(eventFd, eventBuf[:]); err != nil {
+			log.Printf("failed to write eventfd (AfterFunc): %v", err)
+		}
+
+		// udp connection 종료 (tun은 Cleanup에서 처리)
+		if err := conn.Close(); err != nil {
+			log.Printf("failed to udp close: %v", err)
+		}
+	})
+	errGroup.Go(func() error {
+		if err := udpToTun(errCtx, session); err != nil {
+			return fmt.Errorf("failed to UDP to TUN: %w", err)
+		}
+		return nil
+	})
+	errGroup.Go(func() error {
+		if err := tunToUdp(errCtx, session); err != nil {
+			return fmt.Errorf("failed to TUN To UDP: %w", err)
+		}
+		return nil
+	})
+	errGroup.Go(func() error {
+		if err := keepAliveLoop(errCtx, session); err != nil {
+			return fmt.Errorf("failed to keep alive loop: %w", err)
+		}
+		return nil
+	})
+
+	err = errGroup.Wait()
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+
+	return err
+}
+
+func tunToUdp(ctx context.Context, sess *tunnelSession) error {
+	buf := make([]byte, protocol.MaxPayloadSize)
+	for {
+		n, err := sess.tun.ReadContext(ctx, buf, sess.eventFd)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			message := protocol.Message{
+				Type:    protocol.MessageTypeData,
+				PeerID:  sess.peerID,
+				Payload: buf[:n],
+			}
+			packet, err := protocol.EncodePacket(&message, sess.authKey)
+			if err != nil {
+				return err
+			}
+			written, err := sess.conn.Write(packet)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			if written != len(packet) {
+				return io.ErrShortWrite
+			}
+		}
+	}
+}
+
+func udpToTun(ctx context.Context, sess *tunnelSession) error {
+	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AuthTagLen)
+	for {
+		n, err := sess.conn.Read(buf)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		if n > 0 {
+			packet, err := protocol.DecodePacket(buf[:n], sess.authKey)
+			if err != nil {
+				return err
+			}
+			if packet.Type != protocol.MessageTypeData {
+				return fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeData, packet.Type)
+			}
+			written, err := sess.tun.WriteContext(ctx, packet.Payload)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			if written != len(packet.Payload) {
+				return io.ErrShortWrite
+			}
+		}
+	}
+}
+
+func keepAliveLoop(ctx context.Context, sess *tunnelSession) error {
+	ticker := time.NewTicker(defaultKeepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			message := protocol.Message{
+				Type:   protocol.MessageTypeKeepalive,
+				PeerID: sess.peerID,
+			}
+			packet, err := protocol.EncodePacket(&message, sess.authKey)
+			if err != nil {
+				return err
+			}
+			written, err := sess.conn.Write(packet)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			if written != len(packet) {
+				return io.ErrShortWrite
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}

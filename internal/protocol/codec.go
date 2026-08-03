@@ -6,6 +6,19 @@ import (
 	"fmt"
 )
 
+/*
+[header 12 bytes][payload 가변 bytes][hmac tag 32 bytes]
+
+[header] 12 bytes
+protocolversion 1byte
+type 			1byte
+flags 			1byte
+reserved 		1byte
+peerID			8byte
+[payload] 가변 bytes
+[hmac tag] 32 bytes
+*/
+
 // 네트워크 프로토콜이면 BigEndian을 사용하는게 일반 적
 // 전통적으로 네트워크 바이트 오더가 BigEndian이기 떄문
 func Encode(m *Message) ([]byte, error) {
@@ -63,7 +76,28 @@ func Decode(buf []byte) (*Message, error) {
 		PeerID:   peerID,
 		Payload:  payload,
 	}, nil
+}
 
+func EncodePacket(message *Message, psk []byte) ([]byte, error) {
+	packet, err := Encode(message)
+	if err != nil {
+		return nil, err
+	}
+	return AppendAuthTag(psk, packet), nil
+}
+
+func DecodePacket(buf []byte, psk []byte) (*Message, error) {
+	packet, ok := VerifyAuthTag(psk, buf)
+	if !ok {
+		return nil, fmt.Errorf("failed to verify auth tag: %w", ErrAuthenticationFailed)
+	}
+
+	message, err := Decode(packet)
+	if err != nil {
+		return nil, err
+	}
+
+	return message, nil
 }
 
 /*

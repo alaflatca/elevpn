@@ -25,6 +25,8 @@ type ServerConfig struct {
 	TunName        string
 	TunAddrCIDR    string
 	VPNNetworkCIDR string
+	PSK            string
+	AuthKey        []byte
 }
 
 func (s *ServerConfig) normalize() error {
@@ -49,6 +51,11 @@ func (s *ServerConfig) normalize() error {
 	binary.BigEndian.PutUint32(serverIPBytes[:], serverAddr)
 	tunAddr := netip.AddrFrom4(serverIPBytes)
 	s.TunAddrCIDR = fmt.Sprintf("%s/%d", tunAddr.String(), ones)
+
+	if s.PSK == "" {
+		return fmt.Errorf("psk must not be empty")
+	}
+	s.AuthKey = []byte(s.PSK)
 
 	return nil
 }
@@ -155,7 +162,7 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 }
 
 func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error {
-	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize)
+	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AuthTagLen)
 
 	for {
 		n, peerAddr, err := conn.ReadFromUDP(buf)
@@ -166,7 +173,7 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 			return err
 		}
 
-		message, err := protocol.Decode(buf[:n])
+		message, err := protocol.DecodePacket(buf[:n], s.cfg.AuthKey)
 		if err != nil {
 			log.Printf("[udpToTun] failed to decode: %v", err)
 			continue
@@ -220,7 +227,7 @@ func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDP
 				PeerID:  peer.id,
 				Payload: buf[:n], // 이것도 따로 복사하는게 나은지
 			}
-			data, err := protocol.Encode(message)
+			data, err := protocol.EncodePacket(message, s.cfg.AuthKey)
 			if err != nil {
 				return err
 			}

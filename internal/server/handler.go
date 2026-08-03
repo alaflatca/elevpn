@@ -53,7 +53,7 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 		Payload: welcomePayloadBytes,
 	}
 
-	welcomePacket, err := protocol.Encode(msg)
+	welcomePacket, err := protocol.EncodePacket(msg, s.cfg.AuthKey)
 	if err != nil {
 		return err
 	}

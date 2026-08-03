@@ -31,6 +31,8 @@ const (
 
 	MaxPayloadSize          = 1460
 	DefaultTunnelMTU uint16 = 1460
+
+	AuthTagLen = 32
 )
 
 type Message struct {

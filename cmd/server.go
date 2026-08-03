@@ -11,6 +11,7 @@ type serverOptions struct {
 	ListenAddr     string
 	TunName        string
 	VPNNetworkCIDR string
+	PSK            string
 }
 
 var serverOpts = serverOptions{}
@@ -28,6 +29,7 @@ var serverCmd = &cobra.Command{
 			ListenAddr:     serverOpts.ListenAddr,
 			TunName:        serverOpts.TunName,
 			VPNNetworkCIDR: serverOpts.VPNNetworkCIDR,
+			PSK:            serverOpts.PSK,
 		})
 		if err != nil {
 			return err
@@ -45,4 +47,5 @@ func init() {
 	serverCmd.Flags().StringVar(&serverOpts.ListenAddr, "listen", "0.0.0.0:9010", "UDP listen address")
 	serverCmd.Flags().StringVar(&serverOpts.TunName, "tun-name", "tun0", "TUN device name")
 	serverCmd.Flags().StringVar(&serverOpts.VPNNetworkCIDR, "vpn-network-cidr", "10.77.0.0/24", "VPN Network CIDR (server)")
+	serverCmd.Flags().StringVar(&serverOpts.PSK, "psk", "test-secret", "psk field")
 }
