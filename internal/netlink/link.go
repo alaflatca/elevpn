@@ -52,7 +52,7 @@ func getDefaultRoute(fd int) (DefaultRoute, error) {
 // 마지막에 Type = 3 (NLMSG_DONE)  메세지를 하나 보냄
 // [netlink header][route, x header][attr][attr][attr]
 func recvDefaultRoute(fd int, want uint32) (DefaultRoute, error) {
-	if err := setSocketTimeout(fd, 1); err != nil {
+	if err := setSocketTimeout(fd, 5); err != nil {
 		return DefaultRoute{}, err
 	}
 
@@ -106,7 +106,7 @@ func recvDefaultRoute(fd int, want uint32) (DefaultRoute, error) {
 				return *defaultRoute, nil
 			case unix.NLMSG_ERROR:
 				return DefaultRoute{}, fmt.Errorf("nlmsg error: %v", msgType)
-			case 24:
+			case unix.RTM_NEWROUTE:
 				endPos := pos + int(msgLength)
 
 				// 디폴트 인터페이스 구별
