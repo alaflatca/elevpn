@@ -20,13 +20,14 @@ const (
 
 	ProtocolVersion = 1
 
-	MessageHeaderLen = 12
-	/* Message Header 12 byte
+	MessageHeaderLen = 20
+	/* Message Header 20 byte
 	protocolversion 1byte
 	type 			1byte
 	flags 			1byte
 	reserved 		1byte
 	peerID			8byte
+	sequence 		8byte
 	*/
 
 	MaxPayloadSize          = 1460
@@ -41,5 +42,6 @@ type Message struct {
 	Flags    uint8
 	Reserved uint8
 	PeerID   uint64
+	Sequence uint64
 	Payload  []byte
 }

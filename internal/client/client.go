@@ -16,10 +16,6 @@ const (
 	defaultKeepaliveInterval = 10 * time.Second
 )
 
-type Client struct {
-	cfg ClientConfig
-}
-
 type ClientConfig struct {
 	ListenAddr      string
 	ServerEndpoint  string
@@ -28,6 +24,10 @@ type ClientConfig struct {
 	ServerRouteCIDR string
 	PSK             string
 	AuthKey         []byte
+}
+
+type Client struct {
+	cfg ClientConfig
 }
 
 func (c *ClientConfig) normalize() error {
@@ -106,7 +106,17 @@ func (c *Client) Run(ctx context.Context) error {
 		return err
 	}
 
-	return c.runTunnel(ctx, tunDevice, conn, result.peerID)
+	session := &session{
+		tun:     tunDevice,
+		conn:    conn,
+		peerID:  result.peerID,
+		authKey: c.cfg.AuthKey,
+
+		clientSendSequence: result.clientSequence,
+		lastServerSequence: result.serverSequence,
+	}
+
+	return session.run(ctx)
 }
 
 func (c *Client) DialUDP(ctx context.Context) (*net.UDPConn, error) {

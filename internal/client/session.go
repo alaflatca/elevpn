@@ -10,21 +10,26 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 )
 
-type tunnelSession struct {
+type session struct {
+	mu      sync.Mutex
 	tun     *tun.Tun
 	conn    *net.UDPConn
 	eventFd int
 	peerID  uint64
 	authKey []byte
+
+	clientSendSequence uint64
+	lastServerSequence uint64
 }
 
-func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, peerID uint64) error {
+func (s *session) run(ctx context.Context) error {
 	// initval, eventfd counter 초기값
 	// EFD_CLOEXEC, exec 시 fd 자동 close
 	// EFD_NONBLOCK, read/write가 block되지 않게 함
@@ -34,13 +39,7 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	}
 	defer unix.Close(eventFd)
 
-	session := &tunnelSession{
-		tun:     tunDevice,
-		conn:    conn,
-		eventFd: eventFd,
-		peerID:  peerID,
-		authKey: c.cfg.AuthKey,
-	}
+	s.eventFd = eventFd
 
 	errGroup, errCtx := errgroup.WithContext(ctx)
 
@@ -53,24 +52,24 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 		}
 
 		// udp connection 종료 (tun은 Cleanup에서 처리)
-		if err := conn.Close(); err != nil {
+		if err := s.conn.Close(); err != nil {
 			log.Printf("failed to udp close: %v", err)
 		}
 	})
 	errGroup.Go(func() error {
-		if err := udpToTun(errCtx, session); err != nil {
+		if err := s.udpToTun(errCtx); err != nil {
 			return fmt.Errorf("failed to UDP to TUN: %w", err)
 		}
 		return nil
 	})
 	errGroup.Go(func() error {
-		if err := tunToUdp(errCtx, session); err != nil {
+		if err := s.tunToUdp(errCtx); err != nil {
 			return fmt.Errorf("failed to TUN To UDP: %w", err)
 		}
 		return nil
 	})
 	errGroup.Go(func() error {
-		if err := keepAliveLoop(errCtx, session); err != nil {
+		if err := s.keepAliveLoop(errCtx); err != nil {
 			return fmt.Errorf("failed to keep alive loop: %w", err)
 		}
 		return nil
@@ -84,7 +83,7 @@ func (c *Client) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 	return err
 }
 
-func tunToUdp(ctx context.Context, sess *tunnelSession) error {
+func (sess *session) tunToUdp(ctx context.Context) error {
 	buf := make([]byte, protocol.MaxPayloadSize)
 	for {
 		n, err := sess.tun.ReadContext(ctx, buf, sess.eventFd)
@@ -93,9 +92,10 @@ func tunToUdp(ctx context.Context, sess *tunnelSession) error {
 		}
 		if n > 0 {
 			message := protocol.Message{
-				Type:    protocol.MessageTypeData,
-				PeerID:  sess.peerID,
-				Payload: buf[:n],
+				Type:     protocol.MessageTypeData,
+				PeerID:   sess.peerID,
+				Sequence: sess.nextSendSequence(),
+				Payload:  buf[:n],
 			}
 			packet, err := protocol.EncodePacket(&message, sess.authKey)
 			if err != nil {
@@ -115,7 +115,7 @@ func tunToUdp(ctx context.Context, sess *tunnelSession) error {
 	}
 }
 
-func udpToTun(ctx context.Context, sess *tunnelSession) error {
+func (sess *session) udpToTun(ctx context.Context) error {
 	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AuthTagLen)
 	for {
 		n, err := sess.conn.Read(buf)
@@ -133,6 +133,9 @@ func udpToTun(ctx context.Context, sess *tunnelSession) error {
 			if packet.Type != protocol.MessageTypeData {
 				return fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeData, packet.Type)
 			}
+			if err := sess.acceptServerSequence(packet.Sequence); err != nil {
+				continue
+			}
 			written, err := sess.tun.WriteContext(ctx, packet.Payload)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -147,7 +150,7 @@ func udpToTun(ctx context.Context, sess *tunnelSession) error {
 	}
 }
 
-func keepAliveLoop(ctx context.Context, sess *tunnelSession) error {
+func (sess *session) keepAliveLoop(ctx context.Context) error {
 	ticker := time.NewTicker(defaultKeepaliveInterval)
 	defer ticker.Stop()
 
@@ -155,8 +158,9 @@ func keepAliveLoop(ctx context.Context, sess *tunnelSession) error {
 		select {
 		case <-ticker.C:
 			message := protocol.Message{
-				Type:   protocol.MessageTypeKeepalive,
-				PeerID: sess.peerID,
+				Type:     protocol.MessageTypeKeepalive,
+				PeerID:   sess.peerID,
+				Sequence: sess.nextSendSequence(),
 			}
 			packet, err := protocol.EncodePacket(&message, sess.authKey)
 			if err != nil {
@@ -176,4 +180,23 @@ func keepAliveLoop(ctx context.Context, sess *tunnelSession) error {
 			return ctx.Err()
 		}
 	}
+}
+
+func (sess *session) nextSendSequence() uint64 {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	sess.clientSendSequence++
+	return sess.clientSendSequence
+}
+
+func (sess *session) acceptServerSequence(seq uint64) error {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	if seq <= sess.lastServerSequence {
+		return fmt.Errorf("replay server packet: last=%d actual=%d", sess.lastServerSequence, seq)
+	}
+	sess.lastServerSequence = seq
+	return nil
 }

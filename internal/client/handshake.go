@@ -13,6 +13,9 @@ type handshakeResult struct {
 	peerID   uint64
 	tunnelIP netip.Addr
 	mtu      uint16
+
+	clientSequence uint64
+	serverSequence uint64
 }
 
 // context 처리
@@ -20,8 +23,11 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 	conn.SetWriteDeadline(time.Now().Add(defaultHandshakeTimeout))
 	defer conn.SetWriteDeadline(time.Time{})
 
+	alohaSequence := uint64(1)
+
 	m := &protocol.Message{
-		Type: protocol.MessageTypeAloha,
+		Type:     protocol.MessageTypeAloha,
+		Sequence: alohaSequence,
 	}
 	packet, err := protocol.EncodePacket(m, c.cfg.AuthKey)
 	if err != nil {
@@ -47,6 +53,11 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 		return handshakeResult{}, fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeWelcome, message.Type)
 	}
 
+	expectedWelcomeSequence := uint64(1)
+	if message.Sequence != expectedWelcomeSequence {
+		return handshakeResult{}, fmt.Errorf("invalid welcome sequence: expected=%d actual=%d", expectedWelcomeSequence, message.Sequence)
+	}
+
 	welcomePayload, err := protocol.DecodeWelcomePayload(message.Payload)
 	if err != nil {
 		return handshakeResult{}, err
@@ -56,6 +67,9 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 		peerID:   message.PeerID,
 		tunnelIP: welcomePayload.TunnelIP,
 		mtu:      welcomePayload.MTU,
+
+		clientSequence: alohaSequence,
+		serverSequence: message.Sequence,
 	}
 	log.Printf("[handshake] received WELCOME peer_id=%d tunnel_ip=%s mtu=%d", result.peerID, result.tunnelIP.String(), result.mtu)
 

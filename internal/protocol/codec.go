@@ -37,7 +37,8 @@ func Encode(m *Message) ([]byte, error) {
 	buf[1] = byte(m.Type)
 	buf[2] = m.Flags
 	buf[3] = m.Reserved
-	binary.BigEndian.PutUint64(buf[4:MessageHeaderLen], m.PeerID)
+	binary.BigEndian.PutUint64(buf[4:12], m.PeerID)
+	binary.BigEndian.PutUint64(buf[12:MessageHeaderLen], m.Sequence)
 	copy(buf[MessageHeaderLen:], m.Payload)
 
 	return buf, nil
@@ -52,7 +53,8 @@ func Decode(buf []byte) (*Message, error) {
 	messageType := MessageType(buf[1])
 	flags := buf[2]
 	reserved := buf[3]
-	peerID := binary.BigEndian.Uint64(buf[4:MessageHeaderLen])
+	peerID := binary.BigEndian.Uint64(buf[4:12])
+	sequence := binary.BigEndian.Uint64(buf[12:MessageHeaderLen])
 
 	payloadLen := len(buf) - MessageHeaderLen
 	if payloadLen > MaxPayloadSize {
@@ -74,6 +76,7 @@ func Decode(buf []byte) (*Message, error) {
 		Flags:    flags,
 		Reserved: reserved,
 		PeerID:   peerID,
+		Sequence: sequence,
 		Payload:  payload,
 	}, nil
 }

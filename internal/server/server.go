@@ -183,7 +183,7 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 		case protocol.MessageTypeAloha:
 			err = s.handleAloha(conn, peerAddr)
 		case protocol.MessageTypeKeepalive:
-			err = s.handleKeepalive(message.PeerID)
+			err = s.handleKeepalive(message)
 		case protocol.MessageTypeData:
 			err = s.handleData(ctx, tunDevice, peerAddr, *message)
 		default: // pass 하는게 나을지 로그를 찍을지? 쓸모없는 데이터를 굳이 로그를 찍어야하는지?
@@ -193,6 +193,10 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 		if err != nil {
 			if errors.Is(err, ErrDropPacket) {
 				log.Printf("[udpToTun] drop packet: %v", err)
+				continue
+			}
+			if errors.Is(err, ErrReplayPacket) {
+				log.Printf("[udpToTun] replay packet: %v", err)
 				continue
 			}
 			return err
@@ -222,10 +226,12 @@ func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDP
 				return fmt.Errorf("not found peer ip=%v: %w", destIPv4, ErrDropPacket)
 			}
 
+			nextSeq := peer.nextSendSequence()
 			message := &protocol.Message{
-				Type:    protocol.MessageTypeData,
-				PeerID:  peer.id,
-				Payload: buf[:n], // 이것도 따로 복사하는게 나은지
+				Type:     protocol.MessageTypeData,
+				PeerID:   peer.id,
+				Sequence: nextSeq,
+				Payload:  buf[:n], // 이것도 따로 복사하는게 나은지
 			}
 			data, err := protocol.EncodePacket(message, s.cfg.AuthKey)
 			if err != nil {

@@ -13,8 +13,6 @@ import (
 	"net/netip"
 )
 
-var ErrDropPacket = errors.New("drop packet")
-
 func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 	if conn == nil {
 		return errors.New("udp connection is nil")
@@ -47,10 +45,12 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 		return err
 	}
 
+	nextSeq := peer.nextSendSequence()
 	msg := &protocol.Message{
-		Type:    protocol.MessageTypeWelcome,
-		PeerID:  peer.id,
-		Payload: welcomePayloadBytes,
+		Type:     protocol.MessageTypeWelcome,
+		PeerID:   peer.id,
+		Sequence: nextSeq,
+		Payload:  welcomePayloadBytes,
 	}
 
 	welcomePacket, err := protocol.EncodePacket(msg, s.cfg.AuthKey)
@@ -67,6 +67,61 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 		return io.ErrShortWrite
 	}
 	log.Printf("[handshake] sent WELCOME peer_id=%d tunnel_ip=%s mtu=%d", peer.id, tunnelIP.String(), protocol.DefaultTunnelMTU)
+
+	return nil
+}
+
+func (s *Server) handleKeepalive(msg *protocol.Message) error {
+	peer, ok := s.peers.getByID(msg.PeerID)
+	if !ok {
+		return fmt.Errorf("peer not found for keepalive: id=%d: %w", msg.PeerID, ErrDropPacket)
+	}
+	if err := peer.acceptClientSequence(msg.Sequence); err != nil {
+		return fmt.Errorf("failed to accept keepalive sequence: peer_id=%d seq=%d: %w", msg.PeerID, msg.Sequence, err)
+	}
+	peer.touch()
+
+	log.Printf("[keepalive] peer_id=%d last_seen updated", msg.PeerID)
+	return nil
+}
+
+func (s *Server) handleData(ctx context.Context, tun *tun.Tun, peerAddr *net.UDPAddr, message protocol.Message) error {
+	if peerAddr == nil {
+		return fmt.Errorf("peer addr is nil: %w", ErrDropPacket)
+	}
+	if len(message.Payload) == 0 {
+		return fmt.Errorf("peer(%s:%d) payload is empty: %w", peerAddr.IP.String(), peerAddr.Port, ErrDropPacket)
+	}
+
+	peer, ok := s.peers.getByID(message.PeerID)
+	if !ok {
+		return fmt.Errorf("peer not found: id=%d: %w", message.PeerID, ErrDropPacket)
+	}
+	if peer.addr == nil {
+		return fmt.Errorf("peer addr is nil (id=%d): %w", message.PeerID, ErrDropPacket)
+	}
+	if !peer.addr.IP.Equal(peerAddr.IP) {
+		return fmt.Errorf("mismatch ip: expected=%s actual=%s: %w", peer.addr.IP.String(), peerAddr.IP.String(), ErrDropPacket)
+	}
+	if peer.addr.Port != peerAddr.Port {
+		return fmt.Errorf("mismatch port: expected=%d actual=%d: %w", peer.addr.Port, peerAddr.Port, ErrDropPacket)
+	}
+	if err := peer.acceptClientSequence(message.Sequence); err != nil {
+		return fmt.Errorf("failed to accept data sequence: peer_id=%d seq=%d: %w", peer.id, message.Sequence, err)
+	}
+
+	written, err := tun.WriteContext(ctx, message.Payload)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	if written != len(message.Payload) {
+		return io.ErrShortWrite
+	}
+
+	peer.touch()
 
 	return nil
 }
@@ -116,53 +171,4 @@ func validIPRange(peerID uint64, prefix int) bool {
 	}
 
 	return true
-}
-
-func (s *Server) handleKeepalive(peerID uint64) error {
-	if err := s.peers.touch(peerID); err != nil {
-		return fmt.Errorf("failed to touch keepalive peer_id=%d: %w", peerID, ErrDropPacket)
-	}
-	log.Printf("[keepalive] peer_id=%d last_seen updated", peerID)
-
-	return nil
-}
-
-func (s *Server) handleData(ctx context.Context, tun *tun.Tun, peerAddr *net.UDPAddr, message protocol.Message) error {
-	if peerAddr == nil {
-		return fmt.Errorf("peer addr is nil: %w", ErrDropPacket)
-	}
-	if len(message.Payload) == 0 {
-		return fmt.Errorf("peer(%s:%d) payload is empty: %w", peerAddr.IP.String(), peerAddr.Port, ErrDropPacket)
-	}
-
-	peer, ok := s.peers.getByID(message.PeerID)
-	if !ok {
-		return fmt.Errorf("peer not found: id=%d: %w", message.PeerID, ErrDropPacket)
-	}
-	if peer.addr == nil {
-		return fmt.Errorf("peer addr is nil (id=%d): %w", message.PeerID, ErrDropPacket)
-	}
-	if !peer.addr.IP.Equal(peerAddr.IP) {
-		return fmt.Errorf("mismatch ip: expected=%s actual=%s: %w", peer.addr.IP.String(), peerAddr.IP.String(), ErrDropPacket)
-	}
-	if peer.addr.Port != peerAddr.Port {
-		return fmt.Errorf("mismatch port: expected=%d actual=%d: %w", peer.addr.Port, peerAddr.Port, ErrDropPacket)
-	}
-
-	written, err := tun.WriteContext(ctx, message.Payload)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return err
-	}
-	if written != len(message.Payload) {
-		return io.ErrShortWrite
-	}
-
-	if err := s.peers.touch(peer.id); err != nil {
-		return fmt.Errorf("failed to touch peer id=%d: %w", peer.id, ErrDropPacket)
-	}
-
-	return nil
 }
