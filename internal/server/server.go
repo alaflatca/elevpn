@@ -181,7 +181,7 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 
 		switch message.Type {
 		case protocol.MessageTypeAloha:
-			err = s.handleAloha(conn, peerAddr)
+			err = s.handleAloha(conn, peerAddr, message)
 		case protocol.MessageTypeKeepalive:
 			err = s.handleKeepalive(message)
 		case protocol.MessageTypeData:

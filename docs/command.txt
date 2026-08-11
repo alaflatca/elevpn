@@ -8,9 +8,13 @@ VPN 네트워크 설정 명령
 ---------------------
 
 VPN 대역          : 10.77.0.0/24
+서버 TUN 주소     : 10.77.0.1/24
+클라이언트 TUN 주소: 10.77.0.2/32, 10.77.0.3/32 ...
+TUN MTU           : 1460
 nftables 테이블   : vpnnat
 nftables 체인     : vpn-postrouting
 <server_ip>       : VPN 서버의 공인 IPv4 주소
+<bypass_ip>       : VPN을 우회해야 하는 IPv4 주소
 <real_gateway>    : VPN 연결 전 기본 게이트웨이
 <real_nic>        : 인터넷에 연결된 실제 인터페이스
 <tun_nic>         : VPN TUN 인터페이스
@@ -23,7 +27,39 @@ Server
 서버의 외부 주소로 변환해야 한다.
 
 
-1. IPv4 forwarding 활성화
+1. TUN 인터페이스 생성 및 주소 설정
+-----------------------------------
+
+    ip tuntap add dev tun0 mode tun
+    ip link set dev tun0 mtu 1460
+    ip addr add 10.77.0.1/24 dev tun0
+    ip link set dev tun0 up
+
+elevpn은 위 명령을 그대로 실행하지는 않고, /dev/net/tun과 ioctl을 이용해
+TUN 장치를 만들고 IPv4 주소, netmask, MTU, UP 상태를 설정한다.
+
+서버 TUN에 10.77.0.1/24를 설정하면 커널은 VPN 대역으로 가는 connected
+route를 자동으로 만든다.
+
+    ip route show table main
+
+기대 형태
+
+    10.77.0.0/24 dev tun0 proto kernel scope link src 10.77.0.1
+
+의미
+
+    10.77.0.0/24 대역으로 가는 패킷은
+    tun0 인터페이스를 통해 내보낸다.
+    이때 서버가 사용하는 출발지 주소는 10.77.0.1이다.
+
+이 route가 있어야 서버가 인터넷 응답 패킷을 다시 클라이언트의 tunnel IP로
+돌려보낼 수 있다. 예를 들어 10.77.0.2가 클라이언트 tunnel IP라면, 서버
+커널은 10.77.0.2로 가는 응답 패킷을 tun0로 내보내고 elevpn server는
+그 패킷을 tun.Read로 읽어 UDP DATA 패킷으로 감싸 클라이언트에게 보낸다.
+
+
+2. IPv4 forwarding 활성화
 -------------------------
 
     sysctl -w net.ipv4.ip_forward=1
@@ -33,13 +69,13 @@ elevpn은 /proc/sys/net/ipv4/ip_forward에 직접 1을 쓰고, 종료할 때 기
 값을 복원한다.
 
 
-2. NAT 테이블 생성
+3. NAT 테이블 생성
 ------------------
 
     nft add table ip vpnnat
 
 
-3. postrouting NAT 체인 생성
+4. postrouting NAT 체인 생성
 ----------------------------
 
     nft add chain ip vpnnat vpn-postrouting \
@@ -48,7 +84,7 @@ elevpn은 /proc/sys/net/ipv4/ip_forward에 직접 1을 쓰고, 종료할 때 기
 postrouting hook은 패킷의 출력 경로가 결정된 뒤 실행된다.
 
 
-4. masquerade 규칙 추가
+5. masquerade 규칙 추가
 -----------------------
 
     nft add rule ip vpnnat vpn-postrouting \
@@ -78,15 +114,24 @@ Client
 기존 물리 네트워크를 통해 계속 전송해야 한다.
 
 
-1. VPN 서버로 가는 예외 route 추가
-----------------------------------
+1. VPN을 우회해야 하는 주소에 host route 추가
+---------------------------------------------
 
-    ip route add <server_ip>/32 via <real_gateway> dev <real_nic>
+    ip route add <bypass_ip>/32 via <real_gateway> dev <real_nic>
 
 해석
 
-    VPN 서버의 실제 IP로 가는 패킷만은
+    특정 IP로 가는 패킷만은
     기존 게이트웨이와 기존 인터페이스를 사용한다.
+
+현재 elevpn client는 최소한 VPN 서버 공인 IP를 bypass route에 넣는다.
+SSH로 원격 접속 중인 환경에서는 현재 SSH client IP도 함께 넣어, default
+route를 TUN으로 바꾼 뒤에도 SSH 세션이 끊기지 않게 한다.
+
+예시
+
+    ip route add <server_ip>/32 via <real_gateway> dev <real_nic>
+    ip route add <ssh_client_ip>/32 via <real_gateway> dev <real_nic>
 
 
 2. default route를 TUN으로 변경
@@ -94,12 +139,12 @@ Client
 
     ip route replace default dev <tun_nic>
 
-Linux routing은 prefix가 더 구체적인 경로를 먼저 선택한다. 따라서 VPN
-서버의 /32 host route가 default route보다 우선하고, 그 외 트래픽은
-default route를 따라 TUN으로 들어간다.
+Linux routing은 prefix가 더 구체적인 경로를 먼저 선택한다. 따라서 /32
+host route가 default route보다 우선하고, 그 외 트래픽은 default route를
+따라 TUN으로 들어간다.
 
-적용 순서도 중요하다. 서버 예외 route를 먼저 추가해야 default route를
-TUN으로 바꾼 직후에도 VPN 서버와의 연결이 끊기지 않는다.
+적용 순서도 중요하다. bypass route를 먼저 추가해야 default route를
+TUN으로 바꾼 직후에도 VPN 서버 UDP 연결과 SSH 접속이 끊기지 않는다.
 
 
 Route 명령 해석
@@ -125,7 +170,7 @@ via는 "~을 거쳐서", "~을 통해서"라는 의미로 읽으면 된다.
 Client route 복원
 =================
 
-VPN 종료 시에는 기존 default route를 복원한 뒤 서버 예외 route를 제거한다.
+VPN 종료 시에는 기존 default route를 복원한 뒤 bypass route를 제거한다.
 
     ip route replace default via <real_gateway> dev <real_nic>
-    ip route del <server_ip>/32 via <real_gateway> dev <real_nic>
+    ip route del <bypass_ip>/32 via <real_gateway> dev <real_nic>

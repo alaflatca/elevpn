@@ -13,7 +13,7 @@ import (
 	"net/netip"
 )
 
-func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
+func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *protocol.Message) error {
 	if conn == nil {
 		return errors.New("udp connection is nil")
 	}
@@ -26,6 +26,10 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 		return err
 	}
 	log.Printf("[handshake] received ALOHA from %s", peerAddr.String())
+
+	if err := peer.acceptClientSequence(msg.PeerID); err != nil {
+		return err
+	}
 
 	tunnelIP, err := s.allocateTunnelIP(peer.id)
 	if err != nil {
@@ -46,14 +50,14 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr) error {
 	}
 
 	nextSeq := peer.nextSendSequence()
-	msg := &protocol.Message{
+	message := &protocol.Message{
 		Type:     protocol.MessageTypeWelcome,
 		PeerID:   peer.id,
 		Sequence: nextSeq,
 		Payload:  welcomePayloadBytes,
 	}
 
-	welcomePacket, err := protocol.EncodePacket(msg, s.cfg.AuthKey)
+	welcomePacket, err := protocol.EncodePacket(message, s.cfg.AuthKey)
 	if err != nil {
 		return err
 	}
