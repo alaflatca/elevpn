@@ -7,16 +7,18 @@ import (
 )
 
 /*
-[header 12 bytes][payload 가변 bytes][hmac tag 32 bytes]
+[header 20bytes][payload 가변 bytes][aead tag 16bytes]
 
-[header] 12 bytes
+[header] 20bytes
 protocolversion 1byte
 type 			1byte
 flags 			1byte
 reserved 		1byte
 peerID			8byte
-[payload] 가변 bytes
-[hmac tag] 32 bytes
+sequence		8byte
+
+[payload] 가변bytes
+[aead tag] 16bytes
 */
 
 // 네트워크 프로토콜이면 BigEndian을 사용하는게 일반 적
@@ -81,21 +83,45 @@ func Decode(buf []byte) (*Message, error) {
 	}, nil
 }
 
-func EncodePacket(message *Message, psk []byte) ([]byte, error) {
+func (c *Cipher) EncodePacket(message *Message, direction Direction) ([]byte, error) {
 	packet, err := Encode(message)
 	if err != nil {
 		return nil, err
 	}
-	return AppendAuthTag(psk, packet), nil
-}
 
-func DecodePacket(buf []byte, psk []byte) (*Message, error) {
-	packet, ok := VerifyAuthTag(psk, buf)
-	if !ok {
-		return nil, fmt.Errorf("failed to verify auth tag: %w", ErrAuthenticationFailed)
+	header := packet[:MessageHeaderLen]
+	payload := packet[MessageHeaderLen:]
+
+	sealedPayload, err := c.SealPayload(direction, message.Sequence, header, payload)
+	if err != nil {
+		return nil, err
 	}
 
-	message, err := Decode(packet)
+	sealedPacket := make([]byte, MessageHeaderLen+len(sealedPayload))
+	copy(sealedPacket[:MessageHeaderLen], header)
+	copy(sealedPacket[MessageHeaderLen:], sealedPayload)
+
+	return sealedPacket, nil
+}
+
+func (c *Cipher) DecodePacket(buf []byte, direction Direction) (*Message, error) {
+	if len(buf) < MessageHeaderLen {
+		return nil, fmt.Errorf("invalid encrypted packet header length: actual=%d", len(buf))
+	}
+	header := buf[:MessageHeaderLen]
+	sealedPayload := buf[MessageHeaderLen:]
+	sequence := binary.BigEndian.Uint64(buf[12:MessageHeaderLen])
+
+	plainPayload, err := c.OpenPayload(direction, sequence, header, sealedPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	plainPacket := make([]byte, MessageHeaderLen+len(plainPayload))
+	copy(plainPacket[:MessageHeaderLen], header)
+	copy(plainPacket[MessageHeaderLen:], plainPayload)
+
+	message, err := Decode(plainPacket)
 	if err != nil {
 		return nil, err
 	}

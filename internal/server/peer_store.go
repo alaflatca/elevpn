@@ -10,7 +10,8 @@ import (
 )
 
 type peerStore struct {
-	mu         sync.RWMutex
+	mu sync.RWMutex
+
 	byID       map[uint64]*peer
 	byTunnelIP map[netip.Addr]*peer
 	nextID     uint64

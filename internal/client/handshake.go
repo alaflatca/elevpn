@@ -29,7 +29,7 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 		Type:     protocol.MessageTypeAloha,
 		Sequence: alohaSequence,
 	}
-	packet, err := protocol.EncodePacket(m, c.cfg.AuthKey)
+	packet, err := c.cipher.EncodePacket(m, protocol.DirectionClientToServer)
 	if err != nil {
 		return handshakeResult{}, err
 	}
@@ -39,13 +39,13 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 	}
 	log.Printf("[handshake] sent ALOHA to %s", conn.RemoteAddr().String())
 
-	recvBuf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AuthTagLen)
+	recvBuf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AEADTagLen)
 	n, err := conn.Read(recvBuf)
 	if err != nil {
 		return handshakeResult{}, err
 	}
 
-	message, err := protocol.DecodePacket(recvBuf[:n], c.cfg.AuthKey)
+	message, err := c.cipher.DecodePacket(recvBuf[:n], protocol.DirectionServerToClient)
 	if err != nil {
 		return handshakeResult{}, err
 	}

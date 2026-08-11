@@ -61,9 +61,11 @@ func (s *ServerConfig) normalize() error {
 }
 
 type Server struct {
-	cfg   ServerConfig
-	mutex sync.RWMutex
-	peers *peerStore
+	mu sync.RWMutex
+
+	cfg    ServerConfig
+	peers  *peerStore
+	cipher *protocol.Cipher
 }
 
 func New(cfg ServerConfig) (*Server, error) {
@@ -71,7 +73,16 @@ func New(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to normalize server config: %v", err)
 	}
 
-	return &Server{cfg: cfg, peers: newPeerStore()}, nil
+	cipher, err := protocol.NewCipher(cfg.AuthKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	return &Server{
+		cfg:    cfg,
+		peers:  newPeerStore(),
+		cipher: cipher,
+	}, nil
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -162,7 +173,7 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 }
 
 func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error {
-	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AuthTagLen)
+	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AEADTagLen)
 
 	for {
 		n, peerAddr, err := conn.ReadFromUDP(buf)
@@ -173,7 +184,7 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 			return err
 		}
 
-		message, err := protocol.DecodePacket(buf[:n], s.cfg.AuthKey)
+		message, err := s.cipher.DecodePacket(buf[:n], protocol.DirectionClientToServer)
 		if err != nil {
 			log.Printf("[udpToTun] failed to decode: %v", err)
 			continue
@@ -233,7 +244,7 @@ func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDP
 				Sequence: nextSeq,
 				Payload:  buf[:n], // 이것도 따로 복사하는게 나은지
 			}
-			data, err := protocol.EncodePacket(message, s.cfg.AuthKey)
+			data, err := s.cipher.EncodePacket(message, protocol.DirectionServerToClient)
 			if err != nil {
 				return err
 			}

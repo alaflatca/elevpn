@@ -1,6 +1,7 @@
 package server
 
 import (
+	"elevpn/internal/protocol"
 	"net"
 	"net/netip"
 	"sync"
@@ -13,6 +14,8 @@ type peer struct {
 	addr     *net.UDPAddr
 	tunnelIP netip.Addr
 	lastSeen time.Time
+
+	cipher *protocol.Cipher
 
 	serverSendSequence uint64
 	lastClientSequence uint64

@@ -23,7 +23,8 @@ type session struct {
 	conn    *net.UDPConn
 	eventFd int
 	peerID  uint64
-	authKey []byte
+
+	cipher *protocol.Cipher
 
 	clientSendSequence uint64
 	lastServerSequence uint64
@@ -97,7 +98,7 @@ func (sess *session) tunToUdp(ctx context.Context) error {
 				Sequence: sess.nextSendSequence(),
 				Payload:  buf[:n],
 			}
-			packet, err := protocol.EncodePacket(&message, sess.authKey)
+			packet, err := sess.cipher.EncodePacket(&message, protocol.DirectionClientToServer)
 			if err != nil {
 				return err
 			}
@@ -116,7 +117,7 @@ func (sess *session) tunToUdp(ctx context.Context) error {
 }
 
 func (sess *session) udpToTun(ctx context.Context) error {
-	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AuthTagLen)
+	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AEADTagLen)
 	for {
 		n, err := sess.conn.Read(buf)
 		if err != nil {
@@ -126,7 +127,7 @@ func (sess *session) udpToTun(ctx context.Context) error {
 			return err
 		}
 		if n > 0 {
-			packet, err := protocol.DecodePacket(buf[:n], sess.authKey)
+			packet, err := sess.cipher.DecodePacket(buf[:n], protocol.DirectionServerToClient)
 			if err != nil {
 				return err
 			}
@@ -162,7 +163,7 @@ func (sess *session) keepAliveLoop(ctx context.Context) error {
 				PeerID:   sess.peerID,
 				Sequence: sess.nextSendSequence(),
 			}
-			packet, err := protocol.EncodePacket(&message, sess.authKey)
+			packet, err := sess.cipher.EncodePacket(&message, protocol.DirectionClientToServer)
 			if err != nil {
 				return err
 			}

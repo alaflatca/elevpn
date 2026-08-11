@@ -27,7 +27,7 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *prot
 	}
 	log.Printf("[handshake] received ALOHA from %s", peerAddr.String())
 
-	if err := peer.acceptClientSequence(msg.PeerID); err != nil {
+	if err := peer.acceptClientSequence(msg.Sequence); err != nil {
 		return err
 	}
 
@@ -57,7 +57,7 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *prot
 		Payload:  welcomePayloadBytes,
 	}
 
-	welcomePacket, err := protocol.EncodePacket(message, s.cfg.AuthKey)
+	welcomePacket, err := s.cipher.EncodePacket(message, protocol.DirectionServerToClient)
 	if err != nil {
 		return err
 	}

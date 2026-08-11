@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"elevpn/internal/netlink"
+	"elevpn/internal/protocol"
 	"elevpn/internal/tun"
 	"elevpn/internal/vpn"
 	"errors"
@@ -28,6 +29,8 @@ type ClientConfig struct {
 
 type Client struct {
 	cfg ClientConfig
+
+	cipher *protocol.Cipher
 }
 
 func (c *ClientConfig) normalize() error {
@@ -56,7 +59,12 @@ func New(cfg ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
-	return &Client{cfg: cfg}, nil
+	cipher, err := protocol.NewCipher(cfg.AuthKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Client{cfg: cfg, cipher: cipher}, nil
 }
 
 func (c *Client) Run(ctx context.Context) error {
@@ -107,10 +115,11 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 
 	session := &session{
-		tun:     tunDevice,
-		conn:    conn,
-		peerID:  result.peerID,
-		authKey: c.cfg.AuthKey,
+		tun:    tunDevice,
+		conn:   conn,
+		peerID: result.peerID,
+
+		cipher: c.cipher,
 
 		clientSendSequence: result.clientSequence,
 		lastServerSequence: result.serverSequence,
