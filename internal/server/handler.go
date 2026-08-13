@@ -13,7 +13,7 @@ import (
 	"net/netip"
 )
 
-func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *protocol.Message) error {
+func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *protocol.Message, clientRandom protocol.HandshakeRandom) error {
 	if conn == nil {
 		return errors.New("udp connection is nil")
 	}
@@ -31,6 +31,17 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *prot
 		return err
 	}
 
+	serverRandom, err := protocol.GenerateHandshakeRandom()
+	if err != nil {
+		return err
+	}
+
+	peerCipher, err := s.cipherSuite.NewPeerCipher(peer.id, clientRandom, serverRandom)
+	if err != nil {
+		return err
+	}
+	peer.setCipher(peerCipher)
+
 	tunnelIP, err := s.allocateTunnelIP(peer.id)
 	if err != nil {
 		return err
@@ -41,8 +52,9 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *prot
 	log.Printf("[handshake] registered peer id=%d tunnel_ip=%s mtu=%d", peer.id, tunnelIP.String(), protocol.DefaultTunnelMTU)
 
 	welcomePayload := protocol.WelcomePayload{
-		TunnelIP: tunnelIP,
-		MTU:      protocol.DefaultTunnelMTU,
+		TunnelIP:     tunnelIP,
+		MTU:          protocol.DefaultTunnelMTU,
+		ServerRandom: serverRandom,
 	}
 	welcomePayloadBytes, err := protocol.EncodeWelcomePayload(welcomePayload)
 	if err != nil {
@@ -51,13 +63,19 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *prot
 
 	nextSeq := peer.nextSendSequence()
 	message := &protocol.Message{
-		Type:     protocol.MessageTypeWelcome,
-		PeerID:   peer.id,
-		Sequence: nextSeq,
-		Payload:  welcomePayloadBytes,
+		Header: protocol.Header{
+			Type:     protocol.MessageTypeWelcome,
+			PeerID:   peer.id,
+			Sequence: nextSeq,
+		},
+		Payload: welcomePayloadBytes,
 	}
 
-	welcomePacket, err := s.cipher.EncodePacket(message, protocol.DirectionServerToClient)
+	handshakeCipher, err := s.cipherSuite.NewHandshakeCipher(clientRandom)
+	if err != nil {
+		return err
+	}
+	welcomePacket, err := handshakeCipher.EncodePacket(message, protocol.DirectionServerToClient)
 	if err != nil {
 		return err
 	}
@@ -76,9 +94,9 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *prot
 }
 
 func (s *Server) handleKeepalive(msg *protocol.Message) error {
-	peer, ok := s.peers.getByID(msg.PeerID)
-	if !ok {
-		return fmt.Errorf("peer not found for keepalive: id=%d: %w", msg.PeerID, ErrDropPacket)
+	peer, err := s.peers.getByID(msg.PeerID)
+	if err != nil {
+		return fmt.Errorf("peer not found for keepalive: id=%d: %w", msg.PeerID, err)
 	}
 	if err := peer.acceptClientSequence(msg.Sequence); err != nil {
 		return fmt.Errorf("failed to accept keepalive sequence: peer_id=%d seq=%d: %w", msg.PeerID, msg.Sequence, err)
@@ -97,8 +115,8 @@ func (s *Server) handleData(ctx context.Context, tun *tun.Tun, peerAddr *net.UDP
 		return fmt.Errorf("peer(%s:%d) payload is empty: %w", peerAddr.IP.String(), peerAddr.Port, ErrDropPacket)
 	}
 
-	peer, ok := s.peers.getByID(message.PeerID)
-	if !ok {
+	peer, err := s.peers.getByID(message.PeerID)
+	if err != nil {
 		return fmt.Errorf("peer not found: id=%d: %w", message.PeerID, ErrDropPacket)
 	}
 	if peer.addr == nil {
@@ -126,7 +144,6 @@ func (s *Server) handleData(ctx context.Context, tun *tun.Tun, peerAddr *net.UDP
 	}
 
 	peer.touch()
-
 	return nil
 }
 

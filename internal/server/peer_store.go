@@ -45,16 +45,16 @@ func (ps *peerStore) register(addr *net.UDPAddr) (*peer, error) {
 	return p, nil
 }
 
-func (ps *peerStore) getByID(id uint64) (*peer, bool) {
+func (ps *peerStore) getByID(id uint64) (*peer, error) {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
 	p, ok := ps.byID[id]
 	if !ok || p == nil {
-		return nil, false
+		return nil, ErrDropPacket
 	}
 
-	return p, true
+	return p, nil
 }
 
 func (ps *peerStore) getByTunnelIP(ip netip.Addr) (*peer, bool) {

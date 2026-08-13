@@ -73,13 +73,15 @@ func Decode(buf []byte) (*Message, error) {
 	copy(payload, buf[MessageHeaderLen:])
 
 	return &Message{
-		Version:  version,
-		Type:     messageType,
-		Flags:    flags,
-		Reserved: reserved,
-		PeerID:   peerID,
-		Sequence: sequence,
-		Payload:  payload,
+		Header: Header{
+			Version:  version,
+			Type:     messageType,
+			Flags:    flags,
+			Reserved: reserved,
+			PeerID:   peerID,
+			Sequence: sequence,
+		},
+		Payload: payload,
 	}, nil
 }
 
@@ -127,6 +129,28 @@ func (c *Cipher) DecodePacket(buf []byte, direction Direction) (*Message, error)
 	}
 
 	return message, nil
+}
+
+func PeekHeader(buf []byte) (Header, error) {
+	if len(buf) < MessageHeaderLen {
+		return Header{}, fmt.Errorf("invalid header length: expected>=%d actual=%d", MessageHeaderLen, len(buf))
+	}
+
+	version := buf[0]
+	messageType := MessageType(buf[1])
+	flags := buf[2]
+	reserved := buf[3]
+	peerID := binary.BigEndian.Uint64(buf[4:12])
+	sequence := binary.BigEndian.Uint64(buf[12:MessageHeaderLen])
+
+	return Header{
+		Version:  version,
+		Type:     messageType,
+		Flags:    flags,
+		Reserved: reserved,
+		PeerID:   peerID,
+		Sequence: sequence,
+	}, nil
 }
 
 /*

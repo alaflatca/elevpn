@@ -93,10 +93,12 @@ func (sess *session) tunToUdp(ctx context.Context) error {
 		}
 		if n > 0 {
 			message := protocol.Message{
-				Type:     protocol.MessageTypeData,
-				PeerID:   sess.peerID,
-				Sequence: sess.nextSendSequence(),
-				Payload:  buf[:n],
+				Header: protocol.Header{
+					Type:     protocol.MessageTypeData,
+					PeerID:   sess.peerID,
+					Sequence: sess.nextSendSequence(),
+				},
+				Payload: buf[:n],
 			}
 			packet, err := sess.cipher.EncodePacket(&message, protocol.DirectionClientToServer)
 			if err != nil {
@@ -159,9 +161,11 @@ func (sess *session) keepAliveLoop(ctx context.Context) error {
 		select {
 		case <-ticker.C:
 			message := protocol.Message{
-				Type:     protocol.MessageTypeKeepalive,
-				PeerID:   sess.peerID,
-				Sequence: sess.nextSendSequence(),
+				Header: protocol.Header{
+					Type:     protocol.MessageTypeKeepalive,
+					PeerID:   sess.peerID,
+					Sequence: sess.nextSendSequence(),
+				},
 			}
 			packet, err := sess.cipher.EncodePacket(&message, protocol.DirectionClientToServer)
 			if err != nil {

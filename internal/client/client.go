@@ -30,7 +30,7 @@ type ClientConfig struct {
 type Client struct {
 	cfg ClientConfig
 
-	cipher *protocol.Cipher
+	cipherSuite *protocol.CipherSuite
 }
 
 func (c *ClientConfig) normalize() error {
@@ -59,12 +59,12 @@ func New(cfg ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
-	cipher, err := protocol.NewCipher(cfg.AuthKey)
+	cipherSuite, err := protocol.NewCipherSuite(cfg.AuthKey)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Client{cfg: cfg, cipher: cipher}, nil
+	return &Client{cfg: cfg, cipherSuite: cipherSuite}, nil
 }
 
 func (c *Client) Run(ctx context.Context) error {
@@ -119,7 +119,7 @@ func (c *Client) Run(ctx context.Context) error {
 		conn:   conn,
 		peerID: result.peerID,
 
-		cipher: c.cipher,
+		cipher: result.cipher,
 
 		clientSendSequence: result.clientSequence,
 		lastServerSequence: result.serverSequence,

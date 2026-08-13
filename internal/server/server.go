@@ -63,9 +63,9 @@ func (s *ServerConfig) normalize() error {
 type Server struct {
 	mu sync.RWMutex
 
-	cfg    ServerConfig
-	peers  *peerStore
-	cipher *protocol.Cipher
+	cfg         ServerConfig
+	peers       *peerStore
+	cipherSuite *protocol.CipherSuite
 }
 
 func New(cfg ServerConfig) (*Server, error) {
@@ -73,15 +73,15 @@ func New(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to normalize server config: %v", err)
 	}
 
-	cipher, err := protocol.NewCipher(cfg.AuthKey)
+	cipherSuite, err := protocol.NewCipherSuite(cfg.AuthKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
 
 	return &Server{
-		cfg:    cfg,
-		peers:  newPeerStore(),
-		cipher: cipher,
+		cfg:         cfg,
+		peers:       newPeerStore(),
+		cipherSuite: cipherSuite,
 	}, nil
 }
 
@@ -173,7 +173,7 @@ func (s *Server) runTunnel(ctx context.Context, tunDevice *tun.Tun, conn *net.UD
 }
 
 func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun.Tun) error {
-	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AEADTagLen)
+	buf := make([]byte, protocol.MessageHeaderLen+protocol.HandshakeRandomLen+protocol.MaxPayloadSize+protocol.AEADTagLen)
 
 	for {
 		n, peerAddr, err := conn.ReadFromUDP(buf)
@@ -184,35 +184,71 @@ func (s *Server) udpToTun(ctx context.Context, conn *net.UDPConn, tunDevice *tun
 			return err
 		}
 
-		message, err := s.cipher.DecodePacket(buf[:n], protocol.DirectionClientToServer)
+		header, err := protocol.PeekHeader(buf[:n])
+		if err != nil {
+			log.Printf("[udpToTun] invalid packet header: %v", err)
+			continue
+		}
+
+		if header.Type == protocol.MessageTypeAloha {
+			message, clientRandom, err := s.cipherSuite.DecodeAlohaPacket(buf[:n])
+			if err != nil {
+				log.Printf("[udpToTun] failed to decode: %v", err)
+				continue
+			}
+			err = s.handleAloha(conn, peerAddr, message, clientRandom)
+			if err := handlePacketError("aloha", err); err != nil {
+				return fmt.Errorf("failed to handle aloha: %w", err)
+			}
+			continue
+		}
+
+		peer, err := s.peers.getByID(header.PeerID)
+		if err != nil {
+			log.Printf("[udpToTun] peer not found=%d", header.PeerID)
+			continue
+		}
+
+		cipher := peer.cipherSnapshot()
+		if cipher == nil {
+			log.Printf("[tunToUdp] peer cipher is nil peer_id=%d", peer.id)
+			continue
+		}
+
+		message, err := cipher.DecodePacket(buf[:n], protocol.DirectionClientToServer)
 		if err != nil {
 			log.Printf("[udpToTun] failed to decode: %v", err)
 			continue
 		}
 
-		switch message.Type {
-		case protocol.MessageTypeAloha:
-			err = s.handleAloha(conn, peerAddr, message)
+		switch header.Type {
 		case protocol.MessageTypeKeepalive:
 			err = s.handleKeepalive(message)
 		case protocol.MessageTypeData:
 			err = s.handleData(ctx, tunDevice, peerAddr, *message)
-		default: // pass 하는게 나을지 로그를 찍을지? 쓸모없는 데이터를 굳이 로그를 찍어야하는지?
-			continue
 		}
 
-		if err != nil {
-			if errors.Is(err, ErrDropPacket) {
-				log.Printf("[udpToTun] drop packet: %v", err)
-				continue
-			}
-			if errors.Is(err, ErrReplayPacket) {
-				log.Printf("[udpToTun] replay packet: %v", err)
-				continue
-			}
+		if err := handlePacketError("udpToTun", err); err != nil {
 			return err
 		}
+
+		continue
 	}
+}
+
+func handlePacketError(prefix string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrDropPacket) {
+		log.Printf("[%s] drop packet: %v", prefix, err)
+		return nil
+	}
+	if errors.Is(err, ErrReplayPacket) {
+		log.Printf("[%s] replay packet: %v", prefix, err)
+		return nil
+	}
+	return err
 }
 
 func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDPConn, eventFd int) error {
@@ -234,17 +270,27 @@ func (s *Server) tunToUdp(ctx context.Context, tunDevice *tun.Tun, conn *net.UDP
 
 			peer, ok := s.peers.getByTunnelIP(destIPv4)
 			if !ok {
-				return fmt.Errorf("not found peer ip=%v: %w", destIPv4, ErrDropPacket)
+				log.Printf("not found peer ip=%v", destIPv4)
+				continue
 			}
 
 			nextSeq := peer.nextSendSequence()
 			message := &protocol.Message{
-				Type:     protocol.MessageTypeData,
-				PeerID:   peer.id,
-				Sequence: nextSeq,
-				Payload:  buf[:n], // 이것도 따로 복사하는게 나은지
+				Header: protocol.Header{
+					Type:     protocol.MessageTypeData,
+					PeerID:   peer.id,
+					Sequence: nextSeq,
+				},
+				Payload: buf[:n], // 이것도 따로 복사하는게 나은지
 			}
-			data, err := s.cipher.EncodePacket(message, protocol.DirectionServerToClient)
+
+			cipher := peer.cipherSnapshot()
+			if cipher == nil {
+				log.Printf("[tunToUdp] peer cipher is nil peer_id=%d", peer.id)
+				continue
+			}
+
+			data, err := cipher.EncodePacket(message, protocol.DirectionServerToClient)
 			if err != nil {
 				return err
 			}

@@ -3,8 +3,10 @@ package protocol
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
@@ -15,26 +17,74 @@ const (
 	DirectionServerToClient Direction = 2
 )
 
-func deriveAEADKey(psk []byte) []byte {
-	sum := sha256.Sum256(psk)
-	return sum[:]
+// 규격에 맞는 키 생성 (32 byte 규격의 키 생성)
+func deriveMasterKey(psk []byte) [sha256.Size]byte {
+	return sha256.Sum256(psk)
+}
+
+func deriveHandshakeKey(masterKey [sha256.Size]byte, clientRandom HandshakeRandom) [sha256.Size]byte {
+	mac := hmac.New(sha256.New, masterKey[:])
+	mac.Write(clientRandom[:])
+
+	var key [sha256.Size]byte
+	copy(key[:], mac.Sum(nil))
+
+	return key
+}
+
+func derivePeerKey(masterKey [sha256.Size]byte, peerID uint64, clientRandom HandshakeRandom, serverRandom HandshakeRandom) [sha256.Size]byte {
+	var peerIDBytes [8]byte
+	binary.BigEndian.PutUint64(peerIDBytes[:], peerID)
+
+	mac := hmac.New(sha256.New, masterKey[:])
+	mac.Write(peerIDBytes[:])
+	mac.Write(clientRandom[:])
+	mac.Write(serverRandom[:])
+
+	var key [sha256.Size]byte
+	copy(key[:], mac.Sum(nil))
+
+	return key
 }
 
 type Cipher struct {
 	aead cipher.AEAD
 }
 
-func NewCipher(psk []byte) (*Cipher, error) {
-	// 1단계: 규격에 맞는 키 생성 (32 byte 규격의 키 생성)
-	key := deriveAEADKey(psk)
+type CipherSuite struct {
+	masterKey [sha256.Size]byte
+}
 
-	// 2단계: AES 기본 엔진 생성
+func NewCipherSuite(psk []byte) (*CipherSuite, error) {
+	if len(psk) == 0 {
+		return nil, errors.New("psk is empty")
+	}
+
+	return &CipherSuite{
+		masterKey: deriveMasterKey(psk),
+	}, nil
+}
+
+func (cs *CipherSuite) NewHandshakeCipher(clientRandom HandshakeRandom) (*Cipher, error) {
+	key := deriveHandshakeKey(cs.masterKey, clientRandom)
+
+	return newCipherFromKey(key[:])
+}
+
+func (cs *CipherSuite) NewPeerCipher(peerID uint64, clientRandom HandshakeRandom, serverRandom HandshakeRandom) (*Cipher, error) {
+	key := derivePeerKey(cs.masterKey, peerID, clientRandom, serverRandom)
+
+	return newCipherFromKey(key[:])
+}
+
+func newCipherFromKey(key []byte) (*Cipher, error) {
+	// AES 기본 엔진 생성
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create aes cipher: %w", err)
 	}
 
-	// 3단계: GCM 모드(AEAD 기능) 결합
+	// GCM 모드(AEAD 기능) 결합
 	// 이 단계를 거쳐야 비로소 AEAD 기능(본문 암호화 + 헤더 AAD 인증 + 위변조 방지 태그 생성)
 	// 을 수행하는 최종 암호화 도구(aead)가 완성됩니다.
 	aead, err := cipher.NewGCM(block)

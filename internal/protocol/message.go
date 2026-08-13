@@ -36,12 +36,16 @@ const (
 	AEADTagLen = 16
 )
 
-type Message struct {
+type Header struct {
 	Version  uint8
 	Type     MessageType
 	Flags    uint8
 	Reserved uint8
 	PeerID   uint64
 	Sequence uint64
-	Payload  []byte
+}
+
+type Message struct {
+	Header
+	Payload []byte
 }

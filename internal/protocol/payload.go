@@ -8,12 +8,13 @@ import (
 )
 
 const (
-	WelcomePayloadLen = 6
+	WelcomePayloadLen = 22
 )
 
 type WelcomePayload struct {
-	TunnelIP netip.Addr
-	MTU      uint16
+	TunnelIP     netip.Addr
+	MTU          uint16
+	ServerRandom HandshakeRandom
 }
 
 func EncodeWelcomePayload(payload WelcomePayload) ([]byte, error) {
@@ -29,6 +30,7 @@ func EncodeWelcomePayload(payload WelcomePayload) ([]byte, error) {
 	tunnelIP := payload.TunnelIP.As4()
 	copy(packet[0:4], tunnelIP[:])
 	binary.BigEndian.PutUint16(packet[4:6], payload.MTU)
+	copy(packet[6:WelcomePayloadLen], payload.ServerRandom[:])
 
 	return packet[:], nil
 }
@@ -44,6 +46,7 @@ func DecodeWelcomePayload(buf []byte) (WelcomePayload, error) {
 	copy(ip4[:], buf[0:4])
 	payload.TunnelIP = netip.AddrFrom4(ip4)
 	payload.MTU = binary.BigEndian.Uint16(buf[4:6])
+	copy(payload.ServerRandom[:], buf[6:WelcomePayloadLen])
 
 	return payload, nil
 }

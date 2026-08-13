@@ -14,6 +14,8 @@ type handshakeResult struct {
 	tunnelIP netip.Addr
 	mtu      uint16
 
+	cipher *protocol.Cipher
+
 	clientSequence uint64
 	serverSequence uint64
 }
@@ -23,13 +25,24 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 	conn.SetWriteDeadline(time.Now().Add(defaultHandshakeTimeout))
 	defer conn.SetWriteDeadline(time.Time{})
 
-	alohaSequence := uint64(1)
-
 	m := &protocol.Message{
-		Type:     protocol.MessageTypeAloha,
-		Sequence: alohaSequence,
+		Header: protocol.Header{
+			Type:     protocol.MessageTypeAloha,
+			Sequence: 1,
+		},
 	}
-	packet, err := c.cipher.EncodePacket(m, protocol.DirectionClientToServer)
+
+	clientRandom, err := protocol.GenerateHandshakeRandom()
+	if err != nil {
+		return handshakeResult{}, err
+	}
+
+	handshakeCipher, err := c.cipherSuite.NewHandshakeCipher(clientRandom)
+	if err != nil {
+		return handshakeResult{}, err
+	}
+
+	packet, err := handshakeCipher.EncodeAlohaPacket(m, clientRandom)
 	if err != nil {
 		return handshakeResult{}, err
 	}
@@ -45,7 +58,7 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 		return handshakeResult{}, err
 	}
 
-	message, err := c.cipher.DecodePacket(recvBuf[:n], protocol.DirectionServerToClient)
+	message, err := handshakeCipher.DecodePacket(recvBuf[:n], protocol.DirectionServerToClient)
 	if err != nil {
 		return handshakeResult{}, err
 	}
@@ -63,12 +76,19 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 		return handshakeResult{}, err
 	}
 
+	peerCipher, err := c.cipherSuite.NewPeerCipher(message.PeerID, clientRandom, welcomePayload.ServerRandom)
+	if err != nil {
+		return handshakeResult{}, err
+	}
+
 	result := handshakeResult{
 		peerID:   message.PeerID,
 		tunnelIP: welcomePayload.TunnelIP,
 		mtu:      welcomePayload.MTU,
 
-		clientSequence: alohaSequence,
+		cipher: peerCipher,
+
+		clientSequence: 1,
 		serverSequence: message.Sequence,
 	}
 	log.Printf("[handshake] received WELCOME peer_id=%d tunnel_ip=%s mtu=%d", result.peerID, result.tunnelIP.String(), result.mtu)
