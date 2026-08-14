@@ -22,8 +22,8 @@ type handshakeResult struct {
 
 // context 처리
 func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
-	conn.SetWriteDeadline(time.Now().Add(defaultHandshakeTimeout))
-	defer conn.SetWriteDeadline(time.Time{})
+	conn.SetDeadline(time.Now().Add(defaultHandshakeTimeout))
+	defer conn.SetDeadline(time.Time{})
 
 	m := &protocol.Message{
 		Header: protocol.Header{

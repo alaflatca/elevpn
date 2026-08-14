@@ -39,6 +39,10 @@ func (c *Cipher) EncodeAlohaPacket(message *Message, clientRandom HandshakeRando
 	copy(packet[:len(aad)], aad)
 	copy(packet[len(aad):], sealedPayload)
 
+	// SealPayload에서 AAD는 암호화되지 않고 결과에도 자동으로 포함되지 않지만, tag 계산에는 참여해.
+	// [header 20][clientRandom 16][encrypted payload][AEAD tag 16]
+	//  └────────── AAD ─────────┘  └────── sealedPayload ───────┘
+
 	return packet, nil
 }
 

@@ -9,16 +9,16 @@ import (
 /*
 [header 20bytes][payload 가변 bytes][aead tag 16bytes]
 
-[header] 20bytes
-protocolversion 1byte
-type 			1byte
-flags 			1byte
-reserved 		1byte
-peerID			8byte
-sequence		8byte
+[header] 20 bytes
+protocolversion 1 byte
+type 			1 byte
+flags 			1 byte
+reserved 		1 byte
+peerID			8 byte
+sequence		8 byte
 
-[payload] 가변bytes
-[aead tag] 16bytes
+[payload] 가변 bytes
+[aead tag] 16 bytes
 */
 
 // 네트워크 프로토콜이면 BigEndian을 사용하는게 일반 적
@@ -51,36 +51,27 @@ func Decode(buf []byte) (*Message, error) {
 		return nil, fmt.Errorf("invalid message header len: %d", len(buf))
 	}
 
-	version := buf[0]
-	messageType := MessageType(buf[1])
-	flags := buf[2]
-	reserved := buf[3]
-	peerID := binary.BigEndian.Uint64(buf[4:12])
-	sequence := binary.BigEndian.Uint64(buf[12:MessageHeaderLen])
+	header, err := PeekHeader(buf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to peek header: %w", err)
+	}
 
 	payloadLen := len(buf) - MessageHeaderLen
 	if payloadLen > MaxPayloadSize {
 		return nil, fmt.Errorf("payload size exceeds maximum: max=%d actual=%d", MaxPayloadSize, payloadLen)
 	}
-	if version != ProtocolVersion {
-		return nil, fmt.Errorf("invalid protocol version(%d != %d)", version, ProtocolVersion)
+	if header.Version != ProtocolVersion {
+		return nil, fmt.Errorf("invalid protocol version(%d != %d)", header.Version, ProtocolVersion)
 	}
-	if !messageType.valid() {
-		return nil, fmt.Errorf("unknown message type=%d", messageType)
+	if !header.Type.valid() {
+		return nil, fmt.Errorf("unknown message type=%d", header.Type)
 	}
 
 	payload := make([]byte, payloadLen)
 	copy(payload, buf[MessageHeaderLen:])
 
 	return &Message{
-		Header: Header{
-			Version:  version,
-			Type:     messageType,
-			Flags:    flags,
-			Reserved: reserved,
-			PeerID:   peerID,
-			Sequence: sequence,
-		},
+		Header:  header,
 		Payload: payload,
 	}, nil
 }
@@ -110,11 +101,16 @@ func (c *Cipher) DecodePacket(buf []byte, direction Direction) (*Message, error)
 	if len(buf) < MessageHeaderLen {
 		return nil, fmt.Errorf("invalid encrypted packet header length: actual=%d", len(buf))
 	}
+
 	header := buf[:MessageHeaderLen]
 	sealedPayload := buf[MessageHeaderLen:]
-	sequence := binary.BigEndian.Uint64(buf[12:MessageHeaderLen])
 
-	plainPayload, err := c.OpenPayload(direction, sequence, header, sealedPayload)
+	peekHeader, err := PeekHeader(header)
+	if err != nil {
+		return nil, fmt.Errorf("failed to peek header: %w", err)
+	}
+
+	plainPayload, err := c.OpenPayload(direction, peekHeader.Sequence, header, sealedPayload)
 	if err != nil {
 		return nil, err
 	}

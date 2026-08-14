@@ -10,9 +10,10 @@ Linux TUN 인터페이스를 만들고, TUN에서 읽은 IPv4 패킷을 자체 U
 
 - TUN device 설정
 - UDP tunnel transport
-- PSK/HMAC-SHA256 기반 packet 인증과 무결성 검증
-- client/server handshake
-- peer 등록
+- PSK에서 파생한 AES-GCM key 기반 packet 암호화와 무결성 검증
+- `ALOHA`/`WELCOME` client/server handshake
+- peer 등록, tunnel IP 할당, keepalive와 만료 처리
+- sequence number 기반 replay packet 차단
 - full-tunnel route 변경
 - SSH 접속 유지를 위한 자동 bypass route
 - nftables masquerade
@@ -20,7 +21,9 @@ Linux TUN 인터페이스를 만들고, TUN에서 읽은 IPv4 패킷을 자체 U
 
 ## 현재 상태
 
-현재 버전은 클라이언트 트래픽을 서버를 통해 외부로 내보낼 수 있습니다.
+마지막으로 검증한 안정 버전은 클라이언트 트래픽을 서버를 통해 외부로 내보낼 수 있습니다. 현재 작업 브랜치에서는 기존 PSK/HMAC packet 인증을 AES-GCM 기반 AEAD 암호화로 교체하고 있습니다.
+
+현재까지 sequence number, client/server random, handshake key와 peer별 key 파생, ALOHA 인증, DATA·KEEPALIVE 암복호화가 코드에 반영됐습니다. WELCOME packet의 최종 key/nonce 규격, TUN MTU 재계산, EC2 통합 테스트가 남아 있으므로 AEAD 적용은 아직 완료 상태가 아닙니다.
 
 아래 테스트에서 클라이언트 EC2의 공인 IP는 `3.35.200.113`입니다.
 
@@ -42,18 +45,25 @@ VPN 서버 EC2의 공인 IP는 `54.116.44.5`입니다.
 
 ## 동작 흐름
 
-클라이언트는 먼저 UDP로 서버에 `ALOHA` 메시지를 보냅니다.
+클라이언트는 handshake마다 `clientRandom`을 생성하고, PSK와 `clientRandom`에서 파생한 handshake key로 `ALOHA`를 인증해 서버로 보냅니다.
 
-서버는 클라이언트를 peer로 등록하고 tunnel IP를 할당한 뒤, `WELCOME` 메시지로 응답합니다.
+서버는 ALOHA를 검증한 뒤 클라이언트를 peer로 등록하고 tunnel IP와 `serverRandom`을 할당해 `WELCOME`으로 응답합니다. 양쪽은 `peer ID + clientRandom + serverRandom`에서 같은 peer key를 만들고 이후 DATA와 KEEPALIVE에 사용합니다.
 
 ```text
 client
-  -> ALOHA
+  -> generate clientRandom
+  -> ALOHA(sequence=1, clientRandom)
 
 server
+  -> authenticate ALOHA
   -> register peer
   -> allocate tunnel IP
-  -> WELCOME(peer_id, tunnel_ip, mtu)
+  -> generate serverRandom
+  -> WELCOME(peer_id, tunnel_ip, mtu, serverRandom)
+
+client/server
+  -> derive peer key
+  -> exchange encrypted DATA and KEEPALIVE packets
 ```
 
 전체 데이터 흐름은 아래와 같습니다.
@@ -71,7 +81,7 @@ server
 │      │ raw IP packet                    │
 │      ▼                                  │
 │  elevpn client                          │
-│      │ EncodePacket + HMAC tag          │
+│      │ AES-GCM encrypt + authenticate   │
 │      ▼                                  │
 └──────┼──────────────────────────────────┘
        │ UDP
@@ -79,7 +89,7 @@ server
 ┌──────────────── Server ────────────────┐
 │                                         │
 │  elevpn server                          │
-│      │ Verify HMAC + DecodePacket       │
+│      │ AES-GCM authenticate + decrypt   │
 │      ▼                                  │
 │  tun0                                   │
 │      │ raw IP packet                    │
@@ -128,10 +138,10 @@ default dev tun0
 
 ## 프로토콜
 
-UDP로 전송되는 elevpn packet은 작은 고정 header와 가변 payload, HMAC tag로 구성됩니다.
+현재 작업 중인 elevpn packet은 20바이트 고정 header, 가변 payload, 16바이트 AES-GCM 인증 tag로 구성됩니다. header는 암호화하지 않지만 AAD(Additional Authenticated Data)에 포함해 변조 여부를 검증하고, payload는 암호화와 무결성 검증을 함께 수행합니다.
 
 ```text
-[message header 12 bytes][payload variable][hmac tag 32 bytes]
+[message header 20 bytes][encrypted payload variable][AEAD tag 16 bytes]
 ```
 
 `message header`:
@@ -142,9 +152,17 @@ UDP로 전송되는 elevpn packet은 작은 고정 header와 가변 payload, HMA
 2      flags
 3      reserved
 4:12   peer ID, uint64, big-endian
+12:20  sequence, uint64, big-endian
 ```
 
-HMAC tag는 `message header + payload` 전체를 대상으로 계산합니다. 수신 측은 같은 PSK로 HMAC-SHA256 tag를 다시 계산하고, 받은 tag와 비교해 packet 인증과 무결성을 확인합니다.
+nonce는 방향과 sequence를 결합한 12바이트 값입니다.
+
+```text
+0:4   direction, uint32, big-endian
+4:12  sequence, uint64, big-endian
+```
+
+송신자는 packet을 보낼 때마다 자신의 sequence를 증가시킵니다. 수신자는 peer/session별 마지막 sequence보다 작거나 같은 packet을 replay packet으로 버립니다. 현재 구현은 단순 단조 증가 방식이며, UDP packet 순서 역전을 허용하는 sliding replay window는 아직 적용하지 않았습니다.
 
 message type:
 
@@ -155,11 +173,12 @@ message type:
 4  KEEPALIVE
 ```
 
-`WELCOME` payload:
+현재 작업 중인 `WELCOME` payload:
 
 ```text
-0:4  client tunnel IPv4
-4:6  tunnel MTU, uint16, big-endian
+0:4   client tunnel IPv4
+4:6   tunnel MTU, uint16, big-endian
+6:22  server random, 16 bytes
 ```
 
 `DATA` payload:
@@ -168,21 +187,34 @@ message type:
 TUN interface에서 읽은 raw IPv4 packet
 ```
 
-현재 tunnel MTU는 `1460`입니다.
+ALOHA는 서버가 handshake key를 만들 수 있도록 `clientRandom`을 평문으로 전달하되, header와 함께 AAD로 인증합니다.
+
+```text
+[message header 20][client random 16][encrypted payload][AEAD tag 16]
+```
+
+key 파생은 다음 입력을 사용합니다.
+
+```text
+master key    = SHA-256(PSK)
+handshake key = HMAC-SHA256(master key, client random)
+peer key      = HMAC-SHA256(master key, peer ID || client random || server random)
+```
+
+현재 설정된 tunnel MTU는 아직 `1460`입니다. 그러나 DATA packet에 AEAD를 적용하면 IPv4 기준 outer packet 크기는 다음과 같습니다.
 
 ```text
 outer IPv4 header   20 bytes
 UDP header           8 bytes
-elevpn header       12 bytes
+elevpn header       20 bytes
+AEAD tag            16 bytes
 ----------------------------
-overhead            40 bytes
+overhead            64 bytes
 
-1500 - 40 = 1460
+1500 - 64 = 1436
 ```
 
-초기 구현에서는 실제 네트워크 인터페이스 MTU가 1500일 때, VPN이 추가하는 header 크기를 고려해 TUN MTU를 1460으로 낮췄습니다.
-
-HMAC tag가 추가되면서 실제 UDP packet 뒤에는 32 bytes가 더 붙습니다. 현재는 기능 검증 단계이며, 다음 단계에서 `MaxPayloadSize`와 TUN MTU를 outer packet 크기 기준으로 다시 조정할 예정입니다.
+따라서 일반적인 MTU 1500 경로에서 outer IP fragmentation을 피하려면 TUN MTU와 `MaxPayloadSize`를 `1436` 이하로 조정해야 합니다. 이 변경과 실제 경로 검증은 AEAD 마무리 단계에 포함돼 있습니다.
 
 ## 빌드
 
@@ -211,6 +243,8 @@ sudo ./elevpn client --server-endpoint=54.116.44.5:9010 --psk test-secret
 `--psk`는 서버와 클라이언트가 같은 값을 사용해야 합니다. 기본값 `test-secret`은 테스트 편의를 위한 값입니다.
 
 ## 테스트 실행 로그
+
+아래 로그와 네트워크 상태는 현재 AEAD 전환을 시작하기 전에 EC2에서 검증한 안정 버전의 기록입니다. 이 기록에서는 handshake, peer 관리, keepalive, full-tunnel route, NAT와 cleanup까지 확인했습니다. AEAD 작업 브랜치는 WELCOME packet 규격과 MTU 조정을 마친 뒤 같은 절차로 다시 검증할 예정입니다.
 
 서버 로그:
 
@@ -355,8 +389,10 @@ curl -s https://api.ipify.org?format=json
 현재 제한사항:
 
 - IPv4만 지원
-- payload 암호화 없음
-- replay attack 방지 없음
+- 현재 WELCOME은 handshake key를 사용하므로, 동일 ALOHA가 재전송되면 같은 key/nonce로 서로 다른 WELCOME을 만들 위험이 있음
+- 현재 sequence 검증은 단순 단조 증가 방식이라 UDP packet 순서 역전을 허용하지 않음
+- AEAD overhead를 반영한 TUN MTU와 `MaxPayloadSize` 조정이 아직 남아 있음
+- 현재 AEAD 작업 브랜치는 EC2 end-to-end 테스트 전 상태
 - DNS 설정 없음
 - 영구 설정 파일 없음
 - PSK 배포/교체 구조 없음
@@ -364,7 +400,9 @@ curl -s https://api.ipify.org?format=json
 
 다음 작업:
 
-- sequence number 또는 nonce 추가
-- AEAD 기반 payload 암호화 검토
+- WELCOME에 `serverRandom`을 명시적으로 전달하고 peer key로 암호화하는 handshake 규격 완성
+- TUN MTU와 `MaxPayloadSize`를 `1436` 이하로 조정하고 실제 경로에서 검증
+- 잘못된 PSK, packet 변조, replay와 nonce 재사용을 검증하는 protocol test 추가
+- UDP packet 순서 역전을 허용하는 sliding replay window 검토
 - EC2 또는 Linux network namespace 기반 통합 테스트 스크립트 추가
 - 부분 실패 상황에서 route rollback 동작 개선

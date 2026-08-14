@@ -105,9 +105,7 @@ func buildNonce(direction Direction, sequence uint64) []byte {
 }
 
 /*
-aad
-암호화하지는 않지만 변조 검증할 데이터
-나중에 header를 넣을 예정
+aad : 암호화하지는 않지만 변조 검증할 데이터 (header)
 */
 func (c *Cipher) SealPayload(direction Direction, sequence uint64, aad []byte, payload []byte) ([]byte, error) {
 	nonce := buildNonce(direction, sequence)

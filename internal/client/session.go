@@ -84,40 +84,6 @@ func (s *session) run(ctx context.Context) error {
 	return err
 }
 
-func (sess *session) tunToUdp(ctx context.Context) error {
-	buf := make([]byte, protocol.MaxPayloadSize)
-	for {
-		n, err := sess.tun.ReadContext(ctx, buf, sess.eventFd)
-		if err != nil {
-			return err
-		}
-		if n > 0 {
-			message := protocol.Message{
-				Header: protocol.Header{
-					Type:     protocol.MessageTypeData,
-					PeerID:   sess.peerID,
-					Sequence: sess.nextSendSequence(),
-				},
-				Payload: buf[:n],
-			}
-			packet, err := sess.cipher.EncodePacket(&message, protocol.DirectionClientToServer)
-			if err != nil {
-				return err
-			}
-			written, err := sess.conn.Write(packet)
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				return err
-			}
-			if written != len(packet) {
-				return io.ErrShortWrite
-			}
-		}
-	}
-}
-
 func (sess *session) udpToTun(ctx context.Context) error {
 	buf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AEADTagLen)
 	for {
@@ -147,6 +113,40 @@ func (sess *session) udpToTun(ctx context.Context) error {
 				return err
 			}
 			if written != len(packet.Payload) {
+				return io.ErrShortWrite
+			}
+		}
+	}
+}
+
+func (sess *session) tunToUdp(ctx context.Context) error {
+	buf := make([]byte, protocol.MaxPayloadSize)
+	for {
+		n, err := sess.tun.ReadContext(ctx, buf, sess.eventFd)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			message := protocol.Message{
+				Header: protocol.Header{
+					Type:     protocol.MessageTypeData,
+					PeerID:   sess.peerID,
+					Sequence: sess.nextSendSequence(),
+				},
+				Payload: buf[:n],
+			}
+			packet, err := sess.cipher.EncodePacket(&message, protocol.DirectionClientToServer)
+			if err != nil {
+				return err
+			}
+			written, err := sess.conn.Write(packet)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			if written != len(packet) {
 				return io.ErrShortWrite
 			}
 		}

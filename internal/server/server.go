@@ -63,8 +63,9 @@ func (s *ServerConfig) normalize() error {
 type Server struct {
 	mu sync.RWMutex
 
-	cfg         ServerConfig
-	peers       *peerStore
+	cfg   ServerConfig
+	peers *peerStore
+
 	cipherSuite *protocol.CipherSuite
 }
 

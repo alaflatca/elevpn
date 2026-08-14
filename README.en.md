@@ -10,9 +10,10 @@ This project is not a production VPN. The current goal is to understand and impl
 
 - TUN device setup
 - UDP tunnel transport
-- packet authentication and integrity verification with PSK/HMAC-SHA256
-- client/server handshake
-- peer registration
+- AES-GCM packet encryption and integrity protection with keys derived from a PSK
+- `ALOHA`/`WELCOME` client/server handshake
+- peer registration, tunnel IP allocation, keepalive, and expiration
+- sequence-number-based replay rejection
 - full-tunnel route switching
 - automatic bypass routes for SSH session continuity
 - nftables masquerade
@@ -20,7 +21,9 @@ This project is not a production VPN. The current goal is to understand and impl
 
 ## Current Status
 
-The current MVP can route client traffic through the server.
+The last verified stable version can route client traffic through the server. The current working branch is replacing the previous PSK/HMAC packet authentication with AES-GCM authenticated encryption.
+
+Sequence numbers, client/server random values, handshake and per-peer key derivation, ALOHA authentication, and DATA/KEEPALIVE encryption are now represented in the code. The final WELCOME key/nonce framing, TUN MTU recalculation, and an EC2 integration run are still pending, so the AEAD migration is not yet complete.
 
 In the test below, the client EC2 instance public IP was:
 
@@ -42,18 +45,25 @@ After replacing the client default route with `tun0`, `api.ipify.org` returned t
 
 ## How It Works
 
-The client starts by sending an `ALOHA` message to the server over UDP.
+For each handshake, the client generates a `clientRandom` and authenticates its `ALOHA` packet with a handshake key derived from the PSK and that random value.
 
-The server registers the client as a peer, allocates a tunnel IP, and sends back a `WELCOME` message.
+After validating ALOHA, the server registers the client as a peer, allocates a tunnel IP and `serverRandom`, and returns a `WELCOME` packet. Both sides derive the same peer key from `peer ID + clientRandom + serverRandom` for subsequent DATA and KEEPALIVE packets.
 
 ```text
 client
-  -> ALOHA
+  -> generate clientRandom
+  -> ALOHA(sequence=1, clientRandom)
 
 server
+  -> authenticate ALOHA
   -> register peer
   -> allocate tunnel IP
-  -> WELCOME(peer_id, tunnel_ip, mtu)
+  -> generate serverRandom
+  -> WELCOME(peer_id, tunnel_ip, mtu, serverRandom)
+
+client/server
+  -> derive peer key
+  -> exchange encrypted DATA and KEEPALIVE packets
 ```
 
 The overall data flow looks like this:
@@ -71,7 +81,7 @@ The overall data flow looks like this:
 │      │ raw IP packet                    │
 │      ▼                                  │
 │  elevpn client                          │
-│      │ EncodePacket + HMAC tag          │
+│      │ AES-GCM encrypt + authenticate   │
 │      ▼                                  │
 └──────┼──────────────────────────────────┘
        │ UDP
@@ -79,7 +89,7 @@ The overall data flow looks like this:
 ┌──────────────── Server ────────────────┐
 │                                         │
 │  elevpn server                          │
-│      │ Verify HMAC + DecodePacket       │
+│      │ AES-GCM authenticate + decrypt   │
 │      ▼                                  │
 │  tun0                                   │
 │      │ raw IP packet                    │
@@ -128,10 +138,10 @@ This keeps SSH reachable even when `sudo` drops environment variables such as `S
 
 ## Protocol
 
-Every elevpn packet sent over UDP contains a small fixed header, a variable payload, and an HMAC tag.
+The packet format currently under development uses a fixed 20-byte header, a variable payload, and a 16-byte AES-GCM authentication tag. The header is not encrypted, but it is authenticated as AAD (Additional Authenticated Data). The payload is both encrypted and authenticated.
 
 ```text
-[message header 12 bytes][payload variable][hmac tag 32 bytes]
+[message header 20 bytes][encrypted payload variable][AEAD tag 16 bytes]
 ```
 
 `message header`:
@@ -142,9 +152,17 @@ Every elevpn packet sent over UDP contains a small fixed header, a variable payl
 2      flags
 3      reserved
 4:12   peer ID, uint64, big-endian
+12:20  sequence, uint64, big-endian
 ```
 
-The HMAC tag is calculated over the full `message header + payload`. The receiver recalculates the HMAC-SHA256 tag with the same PSK and compares it with the received tag to verify packet authenticity and integrity.
+The 12-byte nonce is built from the packet direction and sequence number.
+
+```text
+0:4   direction, uint32, big-endian
+4:12  sequence, uint64, big-endian
+```
+
+Each sender increments its own sequence number before sending a packet. The receiver rejects packets whose sequence is less than or equal to the last accepted sequence for that peer or session. This is currently a strictly increasing check; a sliding replay window for out-of-order UDP packets has not been implemented yet.
 
 Message types:
 
@@ -155,11 +173,12 @@ Message types:
 4  KEEPALIVE
 ```
 
-`WELCOME` payload:
+Current work-in-progress `WELCOME` payload:
 
 ```text
-0:4  client tunnel IPv4
-4:6  tunnel MTU, uint16, big-endian
+0:4   client tunnel IPv4
+4:6   tunnel MTU, uint16, big-endian
+6:22  server random, 16 bytes
 ```
 
 `DATA` payload:
@@ -168,21 +187,34 @@ Message types:
 raw IPv4 packet read from the TUN interface
 ```
 
-The current tunnel MTU is `1460`.
+ALOHA exposes `clientRandom` so the server can derive the handshake key, while authenticating it together with the header as AAD.
+
+```text
+[message header 20][client random 16][encrypted payload][AEAD tag 16]
+```
+
+The current key derivation inputs are:
+
+```text
+master key    = SHA-256(PSK)
+handshake key = HMAC-SHA256(master key, client random)
+peer key      = HMAC-SHA256(master key, peer ID || client random || server random)
+```
+
+The configured tunnel MTU is still `1460`. With AEAD enabled, however, the outer IPv4 packet budget becomes:
 
 ```text
 outer IPv4 header   20 bytes
 UDP header           8 bytes
-elevpn header       12 bytes
+elevpn header       20 bytes
+AEAD tag            16 bytes
 ----------------------------
-overhead            40 bytes
+overhead            64 bytes
 
-1500 - 40 = 1460
+1500 - 64 = 1436
 ```
 
-The initial implementation lowered the TUN MTU to 1460 based on the outer IPv4, UDP, and elevpn header overhead.
-
-With the HMAC tag added, each UDP packet now has 32 more bytes at the end. This is still a prototype validation stage, and `MaxPayloadSize`/TUN MTU should be recalculated against the outer packet size in a follow-up step.
+To avoid outer IP fragmentation on a typical MTU 1500 path, the TUN MTU and `MaxPayloadSize` need to be reduced to `1436` or below. This adjustment and path-level verification remain part of the AEAD completion work.
 
 ## Build
 
@@ -211,6 +243,8 @@ sudo ./elevpn client --server-endpoint=54.116.44.5:9010 --psk test-secret
 The server and client must use the same `--psk` value. The default `test-secret` is only for quick testing.
 
 ## Test Run
+
+The logs and network state below come from the last EC2-verified stable version before the current AEAD migration. That run verified the handshake, peer management, keepalive, full-tunnel routing, NAT, and cleanup. The AEAD branch will be tested with the same procedure after the WELCOME packet format and MTU budget are finalized.
 
 Server log:
 
@@ -355,8 +389,10 @@ Server shutdown:
 Current limitations:
 
 - IPv4 only
-- no payload encryption yet
-- no replay attack protection yet
+- WELCOME currently uses the handshake key, so replaying the same ALOHA can make the server emit different WELCOME packets under the same key and nonce
+- the current strictly increasing sequence check does not allow out-of-order UDP packets
+- TUN MTU and `MaxPayloadSize` still need to account for the AEAD overhead
+- the current AEAD branch has not completed an EC2 end-to-end test
 - no DNS configuration
 - no persistent config file
 - no PSK distribution or rotation mechanism
@@ -364,7 +400,9 @@ Current limitations:
 
 Next steps:
 
-- add sequence numbers or nonces
-- evaluate AEAD-based payload encryption
+- finalize the WELCOME handshake format by exposing `serverRandom` and encrypting with the peer key
+- reduce TUN MTU and `MaxPayloadSize` to `1436` or below, then verify the real path
+- add protocol tests for wrong PSKs, tampered packets, replay, and nonce reuse
+- evaluate a sliding replay window for out-of-order UDP packets
 - add integration test scripts for EC2 or Linux network namespaces
 - improve route rollback behavior around partial failures
