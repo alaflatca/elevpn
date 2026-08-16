@@ -37,12 +37,12 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 		return handshakeResult{}, err
 	}
 
-	handshakeCipher, err := c.cipherSuite.NewHandshakeCipher(clientRandom)
+	alohaCipher, err := c.cipherSuite.NewAlohaCipher(clientRandom)
 	if err != nil {
 		return handshakeResult{}, err
 	}
 
-	packet, err := handshakeCipher.EncodeAlohaPacket(m, clientRandom)
+	packet, err := alohaCipher.EncodeAlohaPacket(m, clientRandom)
 	if err != nil {
 		return handshakeResult{}, err
 	}
@@ -52,13 +52,13 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 	}
 	log.Printf("[handshake] sent ALOHA to %s", conn.RemoteAddr().String())
 
-	recvBuf := make([]byte, protocol.MessageHeaderLen+protocol.MaxPayloadSize+protocol.AEADTagLen)
+	recvBuf := make([]byte, protocol.MessageHeaderLen+protocol.HandshakeRandomLen+protocol.MaxPayloadSize+protocol.AEADTagLen)
 	n, err := conn.Read(recvBuf)
 	if err != nil {
 		return handshakeResult{}, err
 	}
 
-	message, err := handshakeCipher.DecodePacket(recvBuf[:n], protocol.DirectionServerToClient)
+	message, serverRandom, err := c.cipherSuite.DecodeWelcomePacket(recvBuf[:n], clientRandom)
 	if err != nil {
 		return handshakeResult{}, err
 	}
@@ -76,7 +76,7 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 		return handshakeResult{}, err
 	}
 
-	peerCipher, err := c.cipherSuite.NewPeerCipher(message.PeerID, clientRandom, welcomePayload.ServerRandom)
+	peerCipher, err := c.cipherSuite.NewPeerCipher(message.PeerID, clientRandom, serverRandom)
 	if err != nil {
 		return handshakeResult{}, err
 	}

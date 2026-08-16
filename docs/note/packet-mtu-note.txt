@@ -1,0 +1,212 @@
+elevpn Packet Structure and MTU Note
+====================================
+
+목적
+----
+
+이 문서는 elevpn의 DATA packet 계층, TUN MTU, AEAD overhead와
+read buffer 크기의 관계를 정리한다.
+
+
+1. MTU 기준
+-----------
+
+외부 IPv4 경로의 MTU를 1500 bytes로 가정한다.
+
+    outer path MTU = 1500 bytes
+
+이 값은 client와 server 사이에서 전송되는 outer IPv4 packet
+전체의 최대 크기다. TUN MTU 1500을 의미하는 것은 아니다.
+
+외부 NIC에 MTU 9001이 표시되어도 공인 인터넷 경로 전체가 9001을
+지원한다는 뜻은 아니므로 1500을 안전한 기준으로 사용한다.
+
+
+2. DATA packet 계층
+-----------------
+
+외부 네트워크에서 전송되는 DATA packet은 다음 계층으로 구성된다.
+
+    Outer IPv4 packet
+    +---------------------------------------------------------+
+    | Outer IPv4 header: 20                                   |
+    |                                                         |
+    | UDP datagram                                            |
+    | +-----------------------------------------------------+ |
+    | | UDP header: 8                                       | |
+    | |                                                     | |
+    | | UDP payload                                         | |
+    | | +-------------------------------------------------+ | |
+    | | | elevpn header: 20                               | | |
+    | | | encrypted inner IP packet: maximum 1436        | | |
+    | | | AEAD tag: 16                                    | | |
+    | | +-------------------------------------------------+ | |
+    | +-----------------------------------------------------+ |
+    +---------------------------------------------------------+
+
+외부에서 봤을 때의 바이트 순서는 다음과 같다.
+
+    [outer IPv4 header]
+    [UDP header]
+    [elevpn header]
+    [encrypted inner IP packet]
+    [AEAD tag]
+
+
+3. 각 영역의 역할
+---------------
+
+outer IPv4 header, 20 bytes
+
+    실제 네트워크에서 client와 VPN server 사이를 이동하기 위한
+    IPv4 header다. UDPConn.Write를 호출하면 커널이 추가한다.
+
+UDP header, 8 bytes
+
+    elevpn client와 server의 UDP port를 표현한다.
+    UDPConn.Write를 호출하면 커널이 추가한다.
+
+elevpn header, 20 bytes
+
+    protocol version, message type, flags, reserved, peer ID, sequence를
+    포함한다. 암호화되지는 않지만 AES-GCM AAD로 인증된다.
+
+encrypted inner IP packet, maximum 1436 bytes
+
+    TUN에서 읽은 원래 IP packet을 AES-GCM으로 암호화한 데이터다.
+    inner IP header, TCP/UDP header, application data를 모두 포함한다.
+
+AEAD tag, 16 bytes
+
+    AES-GCM이 생성하는 인증 tag다. encrypted inner IP packet과
+    AAD로 사용한 elevpn header의 변조 여부를 검증한다.
+
+
+4. inner IP packet
+------------------
+
+TUN은 Ethernet frame이 아닌 L3 IP packet을 읽고 쓴다.
+
+    [inner IPv4 header]
+    [inner TCP or UDP header]
+    [application data]
+
+예를 들어 HTTP 요청이면 inner packet은 다음 정보를 포함한다.
+
+    inner source IP      = client tunnel IP
+    inner destination IP = website IP
+    inner TCP header     = source/destination port
+    application data     = HTTP request
+
+TUN MTU는 application data만의 크기가 아니라 이 inner IP packet
+전체의 최대 크기다.
+
+
+5. TUN MTU 계산
+-----------------
+
+elevpn이 inner IP packet 외부에 추가하는 overhead는 다음과 같다.
+
+    outer IPv4 header = 20 bytes
+    UDP header        =  8 bytes
+    elevpn header     = 20 bytes
+    AEAD tag          = 16 bytes
+    --------------------------------
+    total overhead    = 64 bytes
+
+따라서 TUN에서 읽을 수 있는 inner IP packet의 최대 크기는
+다음과 같다.
+
+    TUN MTU = outer path MTU - total overhead
+            = 1500 - 64
+            = 1436 bytes
+
+최대 크기의 DATA packet은 다음과 같다.
+
+    [outer IPv4 header]       20 bytes
+    [UDP header]               8 bytes
+    [elevpn header]           20 bytes
+    [encrypted inner packet] 1436 bytes
+    [AEAD tag]                16 bytes
+    -----------------------------------
+    [outer IPv4 packet]      1500 bytes
+
+
+6. AES-GCM 길이
+----------------
+
+AES-GCM은 payload를 block 단위로 padding하지 않는다.
+
+    ciphertext length = plaintext length
+    sealed length     = plaintext length + AEAD tag 16
+
+elevpn nonce는 direction 4 bytes와 sequence 8 bytes로 생성하며
+packet에 별도로 추가하지 않는다. 따라서 nonce는 MTU overhead에
+포함되지 않는다.
+
+
+7. 코드에서의 사용
+-------------------
+
+계산한 1436을 TUN MTU와 DATA payload 최대 크기로 사용한다.
+
+    DefaultTunnelMTU = 1436
+    MaxPayloadSize   = 1436
+
+TUN read buffer는 inner IP packet의 최대 크기로 만든다.
+
+    make([]byte, MaxPayloadSize)
+
+암호화된 DATA packet을 받는 UDP buffer는 elevpn header와 AEAD tag까지
+포함해야 한다.
+
+    make([]byte, MessageHeaderLen+MaxPayloadSize+AEADTagLen)
+    = 20 + 1436 + 16
+    = 1472 bytes
+
+이 1472 bytes는 UDP payload 크기다. 커널이 UDP header 8 bytes와
+outer IPv4 header 20 bytes를 추가하면 최종 1500 bytes가 된다.
+
+
+8. Ethernet header를 빼지 않는 이유
+--------------------------------
+
+일반적인 Ethernet MTU 1500은 Ethernet frame 안에 담기는 IP packet의
+최대 크기를 의미한다. Ethernet header는 이 1500 bytes 밖에 있으므로
+TUN MTU 계산에서 추가로 빼지 않는다.
+
+
+9. 적용 확인
+-----------
+
+TUN MTU 확인:
+
+    ip link show tun0
+
+기대:
+
+    tun0: <...> mtu 1436
+
+외부 UDP packet 크기 및 암호화 확인:
+
+    sudo tcpdump -ni <real-nic> -s0 -A -vv udp port 9010
+
+TUN의 평문 inner packet 확인:
+
+    sudo tcpdump -ni tun0 -s0 -A
+
+외부 NIC의 UDP packet에서는 HTTP 요청 내용이 평문으로 보이지
+않아야 하며, tun0에서는 암호화되기 전의 inner packet을 확인할
+수 있어야 한다.
+
+
+10. 현재 가정
+------------
+
+    outer network = IPv4
+    outer path MTU = 1500
+    tunnel packet  = UDP
+    inner packet   = IPv4
+
+outer IPv6를 지원하거나 외부 path MTU가 1500보다 작은 환경을
+지원하려면 해당 헤더 크기와 path MTU를 기준으로 다시 계산해야 한다.

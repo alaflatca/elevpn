@@ -20,20 +20,22 @@ const (
 
 	ProtocolVersion = 1
 
+	// [version 1][type 1][flags 1][reserved 1][peer ID 8][sequence 8]
 	MessageHeaderLen = 20
-	/* Message Header 20 byte
-	protocolversion 1byte
-	type 			1byte
-	flags 			1byte
-	reserved 		1byte
-	peerID			8byte
-	sequence 		8byte
-	*/
+	AEADTagLen       = 16
 
-	MaxPayloadSize          = 1460
-	DefaultTunnelMTU uint16 = 1460
+	// TUN MTU = outer MTU - outer IPv4 - UDP - elevpn header - AEAD tag
+	DefaultOuterMTU    = 1500
+	OuterIPv4HeaderLen = 20
+	UDPHeaderLen       = 8
 
-	AEADTagLen = 16
+	MaxPayloadSize = DefaultOuterMTU -
+		OuterIPv4HeaderLen -
+		UDPHeaderLen -
+		MessageHeaderLen -
+		AEADTagLen
+
+	DefaultTunnelMTU uint16 = MaxPayloadSize
 )
 
 type Header struct {

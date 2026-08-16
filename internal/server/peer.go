@@ -28,8 +28,10 @@ func (p *peer) setCipher(cipher *protocol.Cipher) {
 	p.cipher = cipher
 }
 
-// handshake때 한 번 세팅, 이후 읽기만 함, mutex 보조 불필요
 func (p *peer) cipherSnapshot() *protocol.Cipher {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
 	return p.cipher
 }
 

@@ -52,9 +52,8 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *prot
 	log.Printf("[handshake] registered peer id=%d tunnel_ip=%s mtu=%d", peer.id, tunnelIP.String(), protocol.DefaultTunnelMTU)
 
 	welcomePayload := protocol.WelcomePayload{
-		TunnelIP:     tunnelIP,
-		MTU:          protocol.DefaultTunnelMTU,
-		ServerRandom: serverRandom,
+		TunnelIP: tunnelIP,
+		MTU:      protocol.DefaultTunnelMTU,
 	}
 	welcomePayloadBytes, err := protocol.EncodeWelcomePayload(welcomePayload)
 	if err != nil {
@@ -71,11 +70,11 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *prot
 		Payload: welcomePayloadBytes,
 	}
 
-	handshakeCipher, err := s.cipherSuite.NewHandshakeCipher(clientRandom)
+	welcomeCipher, err := s.cipherSuite.NewWelcomeCipher(clientRandom, serverRandom)
 	if err != nil {
 		return err
 	}
-	welcomePacket, err := handshakeCipher.EncodePacket(message, protocol.DirectionServerToClient)
+	welcomePacket, err := welcomeCipher.EncodeWelcomePacket(message, serverRandom)
 	if err != nil {
 		return err
 	}

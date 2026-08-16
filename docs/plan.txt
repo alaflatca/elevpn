@@ -4,106 +4,93 @@
 완료
 ----
 
-1. WELCOME payload encode/decode 분리
+1. peer handshake와 tunnel IP 할당
 
-    protocol/payload.go에 WelcomePayload를 추가했다.
-    server는 EncodeWelcomePayload를 사용해 WELCOME payload를 만든다.
-    client는 DecodeWelcomePayload를 사용해 tunnel IP와 MTU를 읽는다.
-
-
-2. keepalive 기본 흐름
-
-    client는 주기적으로 KEEPALIVE message를 보낸다.
-    server는 KEEPALIVE를 받으면 peer lastSeen을 갱신한다.
+    client는 ALOHA에 client random을 포함해 보낸다.
+    server는 peer를 등록하고 tunnel IP, MTU, server random을 WELCOME으로 보낸다.
+    WELCOME payload는 protocol/payload.go에서 encode/decode한다.
 
 
-3. peer lifecycle 기본 흐름
+2. peer lifecycle
 
-    lastSeen 기준으로 오래 응답 없는 peer를 제거한다.
-    peer 제거 시 byID, byTunnelIP를 함께 정리한다.
-    expirePeersLoop는 server.runTunnel의 errgroup 안에서 errCtx로 실행한다.
-
-    기준값:
-
-        client keepalive interval = 10s
-        server peer timeout       = 30s
-        server cleanup interval   = 10s
+    client는 10초마다 KEEPALIVE를 보낸다.
+    server는 peer의 lastSeen을 갱신하고 30초 이상 응답 없는 peer를 제거한다.
+    peer 제거 시 byID와 byTunnelIP를 함께 정리한다.
 
 
-4. 에러 처리 정책 정리
+3. full-tunnel route와 SSH bypass
 
-    drop 가능한 packet과 tunnel 전체를 종료해야 하는 fatal error를 구분한다.
-    decode 실패, unknown message type, peer not found 같은 상황의 처리 기준을 정리한다.
-
-
-5. route/full-tunnel 정책 정리
-
-    client는 VPN server endpoint를 /32 bypass route로 먼저 추가한다.
-    현재 SSH 접속자의 공인 IP도 NETLINK_SOCK_DIAG/INET_DIAG로 탐지해 /32 bypass route로 추가한다.
-    이후 default route를 tun0로 변경해 나머지 트래픽을 tunnel로 보낸다.
-
-    적용 순서:
-
-        1. server endpoint /32 route 추가
-        2. SSH remote IP /32 route 추가
-        3. default route를 tun0로 replace
-
-    정리 순서:
-
-        1. default route를 기존 gateway/interface로 복구
-        2. bypass route 삭제
-
-    이 방식으로 sudo 실행 시 SSH_CLIENT 환경변수에 의존하지 않아도 SSH 접속을 유지할 수 있다.
+    client는 VPN server endpoint와 현재 SSH remote IP에 /32 bypass route를 먼저 추가한다.
+    SSH remote IP는 NETLINK_SOCK_DIAG/INET_DIAG로 탐지하며 SSH_CLIENT 환경변수에 의존하지 않는다.
+    이후 default route를 tun0로 변경하고 종료 시 기존 route를 복원한다.
 
 
-6. PSK/HMAC 기반 인증/무결성 검증
+4. sequence 기반 replay 방지
 
-    client/server config에 PSK를 추가하고 내부 AuthKey로 변환한다.
-    UDP로 송수신되는 elevpn packet은 EncodePacket/DecodePacket을 사용한다.
-    HMAC-SHA256 tag는 message header + payload 전체를 기준으로 계산한다.
-    수신 측은 같은 PSK로 tag를 다시 계산해 인증과 무결성을 검증한다.
+    client와 server는 각 방향의 송신 sequence와 마지막 수신 sequence를 별도로 관리한다.
+    수신 sequence가 마지막으로 수신한 값보다 작거나 같으면 replay packet으로 버린다.
+    direction과 sequence를 AES-GCM nonce로 사용한다.
 
-    현재 packet 구조:
 
-        [header 12bytes][payload variable][hmac tag 32bytes]
+5. AES-GCM AEAD 암호화
 
-    단, 이 단계는 암호화가 아니므로 payload 내용은 여전히 평문이다.
-    정리 내용은 docs/authentication.txt에 따로 기록했다.
+    PSK에서 master key를 파생하고 client random으로 handshake key를 만든다.
+    peer ID, client random, server random으로 peer별 key를 파생한다.
+    ALOHA와 WELCOME은 handshake cipher를, DATA와 KEEPALIVE는 peer cipher를 사용한다.
+    message header는 AAD로 인증하고 payload는 AES-GCM으로 암복호화한다.
+
+    DATA packet 구조:
+
+        [header 20bytes][encrypted payload variable][AEAD tag 16bytes]
+
+    ALOHA packet 구조:
+
+        [header 20bytes][client random 16bytes][encrypted payload][AEAD tag 16bytes]
+
+
+6. 오류 처리와 cleanup
+
+    버려도 되는 packet 오류와 tunnel을 종료해야 하는 I/O 오류를 구분한다.
+    TUN, route, IP forwarding, nftables masquerade를 적용 역순으로 정리한다.
+    TUN read는 non-blocking fd, poll, eventfd를 사용해 context 취소 시 종료한다.
 
 
 남은 작업
 ---------
 
-1. 암호화와 replay 방지 보강
+1. AEAD MTU 적용과 통합 검증
 
-    현재 UDP packet은 PSK/HMAC으로 인증과 무결성은 검증하지만,
-    payload 자체는 아직 평문이다.
+    IPv4 outer path MTU 1500을 기준으로 다음 overhead를 반영한다.
 
-    진행 순서:
+        outer IPv4 header = 20bytes
+        UDP header        = 8bytes
+        elevpn header     = 20bytes
+        AEAD tag          = 16bytes
 
-        1. sequence number 또는 nonce 추가
-
-            캡처한 정상 패킷을 다시 보내는 replay attack을 막기 위한 값을 message에 추가한다.
-            peer별 마지막 sequence number 관리 또는 nonce 중복 검사를 검토한다.
-
-        2. AEAD 기반 암호화 검토
-
-            AES-GCM 또는 ChaCha20-Poly1305 같은 AEAD 방식으로 payload 암호화와 인증 tag 검증을 함께 처리한다.
-            최종 구조에서는 HMAC을 별도로 유지할지, AEAD 인증 tag로 대체할지 결정한다.
-
-        3. MTU budget 재정리
-
-            HMAC tag 32bytes가 UDP payload 뒤에 추가되었으므로,
-            outer packet 크기를 기준으로 tunnel MTU와 MaxPayloadSize를 다시 검토한다.
+    TUN MTU와 MaxPayloadSize를 1436으로 변경한다.
+    EC2에서 outer UDP packet이 1500 bytes를 넘지 않는지 확인한다.
+    tun0의 평문 packet과 실제 NIC의 암호화된 UDP packet을 tcpdump로 비교한다.
 
 
-2. 운영/테스트 문서 보강
+2. replay window 보강
 
-    실행 전 요구사항, 테스트 명령어, cleanup 확인 방법, known limitations를 정리한다.
-    가능하면 나중에 EC2 또는 Linux network namespace 기반 통합 테스트도 추가한다.
+    현재 seq <= lastSeq 방식은 UDP packet이 순서대로 도착한다고 가정한다.
+    packet 순서 역전을 허용하면서 중복 packet을 차단하는 sliding replay window를 검토한다.
 
 
-3. route rollback 보강
+3. handshake replay 방지
+
+    캡처한 ALOHA를 반복 전송해 peer를 계속 생성하는 상황을 방지한다.
+    client random 중복 검사, 시간 제한, rate limit 등의 handshake 정책을 검토한다.
+
+
+4. route rollback 보강
 
     Route.Apply 중 bypass route를 여러 개 추가하다가 중간 실패하면,
-    이미 추가된 bypass route만 내부에서 rollback하도록 보강한다.
+    이미 추가된 route만 내부에서 rollback하도록 보강한다.
+
+
+5. 테스트 보강
+
+    protocol encode/decode, AEAD 인증 실패, sequence 검증에 대한 unit test를 추가한다.
+    EC2 또는 Linux network namespace를 사용한 end-to-end test를 추가한다.

@@ -1,7 +1,7 @@
 Runtime Check List
 ==================
 
-mage server, mage client 실행 후 현재 네트워크 상태를 확인하기 위한
+elevpn server, elevpn client 실행 후 현재 네트워크 상태를 확인하기 위한
 명령어 모음이다.
 
 
@@ -25,10 +25,12 @@ Server
 
     tun0 존재 여부
     tun0의 IP 주소
+    tun0의 MTU가 1436인지
     인터페이스 UP 상태
 
 예상 예시
 
+    tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1436
     inet 10.77.0.1/24
 
 
@@ -227,25 +229,27 @@ Client
 
 클라이언트에서 확인할 핵심은 다음 네 가지다.
 
-    - tun1이 생성되었는지
-    - tun1에 VPN 주소가 붙었는지
+    - tun0가 생성되었는지
+    - tun0에 VPN 주소와 MTU 1436이 적용되었는지
     - VPN 서버 IP 예외 route가 있는지
-    - default route가 tun1로 바뀌었는지
+    - default route가 tun0로 바뀌었는지
 
 
 1. TUN 인터페이스 확인
 ---------------------
 
-    ip addr show dev tun1
+    ip addr show dev tun0
 
 확인할 수 있는 정보
 
-    tun1 존재 여부
-    tun1의 IP 주소
+    tun0 존재 여부
+    tun0의 IP 주소
+    tun0의 MTU가 1436인지
     인터페이스 UP 상태
 
 예상 예시
 
+    tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1436
     inet 10.77.0.2/32
 
 
@@ -257,17 +261,17 @@ Client
 확인할 수 있는 정보
 
     VPN 서버 IP /32 예외 route 존재 여부
-    default route가 tun1로 변경되었는지
+    default route가 tun0로 변경되었는지
 
 예상 형태
 
     <server-ip>/32 via <real-gateway> dev <real-nic>
-    default dev tun1
+    default dev tun0
 
 예시
 
     203.0.113.10/32 via 192.168.139.1 dev eth0
-    default dev tun1
+    default dev tun0
 
 
 3. 서버 endpoint route 확인
@@ -295,11 +299,11 @@ Client
 
 확인할 수 있는 정보
 
-    일반 인터넷 트래픽이 tun1로 들어가는지
+    일반 인터넷 트래픽이 tun0로 들어가는지
 
 기대 형태
 
-    8.8.8.8 dev tun1
+    8.8.8.8 dev tun0
 
 
 5. UDP socket 확인
@@ -311,6 +315,42 @@ Client
 
     클라이언트 UDP socket 상태
     서버 endpoint와 UDP 연결이 잡혀 있는지
+
+
+AEAD 암호화 확인
+==================
+
+외부 NIC에서 UDP 9010 트래픽을 캡처한다.
+
+    sudo tcpdump -ni <real-nic> -s0 -A udp port 9010
+
+다른 터미널에서 평문 HTTP 요청을 보낸다.
+
+    curl -s http://api.ipify.org?format=json
+
+외부 NIC의 UDP packet에서는 다음 평문이 보이지 않아야 한다.
+
+    GET /?format=json
+    Host: api.ipify.org
+    {"ip":"..."}
+
+같은 트래픽을 tun0에서 캡처하면 암호화되기 전의 평문 inner packet을 확인할 수 있다.
+
+    sudo tcpdump -ni tun0 -s0 -A tcp port 80
+
+최대 DATA packet의 outer IPv4 크기가 1500 bytes를 넘지 않는지도 확인한다.
+
+    sudo tcpdump -ni <real-nic> -vv udp port 9010
+
+현재 IPv4 기준 packet budget은 다음과 같다.
+
+    outer IPv4 header       20bytes
+    UDP header               8bytes
+    elevpn header           20bytes
+    encrypted inner packet 1436bytes
+    AEAD tag                16bytes
+    --------------------------------
+    outer IPv4 packet      1500bytes
 
 
 Short Version
@@ -326,7 +366,7 @@ Short Version
 
 클라이언트에서 자주 볼 명령어
 
-    ip addr show dev tun1
+    ip addr show dev tun0
     ip route show table main
     ip route get <server-ip>
     ip route get 8.8.8.8

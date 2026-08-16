@@ -22,9 +22,20 @@ func deriveMasterKey(psk []byte) [sha256.Size]byte {
 	return sha256.Sum256(psk)
 }
 
-func deriveHandshakeKey(masterKey [sha256.Size]byte, clientRandom HandshakeRandom) [sha256.Size]byte {
+func deriveAlohaKey(masterKey [sha256.Size]byte, clientRandom HandshakeRandom) [sha256.Size]byte {
 	mac := hmac.New(sha256.New, masterKey[:])
 	mac.Write(clientRandom[:])
+
+	var key [sha256.Size]byte
+	copy(key[:], mac.Sum(nil))
+
+	return key
+}
+
+func deriveWelcomeKey(masterKey [sha256.Size]byte, clientRandom HandshakeRandom, serverRandom HandshakeRandom) [sha256.Size]byte {
+	mac := hmac.New(sha256.New, masterKey[:])
+	mac.Write(clientRandom[:])
+	mac.Write(serverRandom[:])
 
 	var key [sha256.Size]byte
 	copy(key[:], mac.Sum(nil))
@@ -65,8 +76,14 @@ func NewCipherSuite(psk []byte) (*CipherSuite, error) {
 	}, nil
 }
 
-func (cs *CipherSuite) NewHandshakeCipher(clientRandom HandshakeRandom) (*Cipher, error) {
-	key := deriveHandshakeKey(cs.masterKey, clientRandom)
+func (cs *CipherSuite) NewAlohaCipher(clientRandom HandshakeRandom) (*Cipher, error) {
+	key := deriveAlohaKey(cs.masterKey, clientRandom)
+
+	return newCipherFromKey(key[:])
+}
+
+func (cs *CipherSuite) NewWelcomeCipher(clientRandom HandshakeRandom, serverRandom HandshakeRandom) (*Cipher, error) {
+	key := deriveWelcomeKey(cs.masterKey, clientRandom, serverRandom)
 
 	return newCipherFromKey(key[:])
 }
