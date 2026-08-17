@@ -2,169 +2,135 @@
 
 언어: 한국어 | [English](./README.en.md)
 
-elevpn은 Go로 만든 작은 TUN-over-UDP VPN 프로토타입입니다.
+elevpn은 Go로 만든 Linux TUN-over-UDP VPN 프로토타입입니다.
 
-Linux TUN 인터페이스를 만들고, TUN에서 읽은 IPv4 패킷을 자체 UDP 프로토콜로 감싼 뒤 VPN 서버로 보냅니다. 서버는 IP forwarding과 nftables masquerade를 적용해 클라이언트 트래픽이 서버의 공인 네트워크를 통해 나가도록 처리합니다.
+클라이언트의 IPv4 패킷을 TUN 인터페이스에서 읽어 AES-GCM으로 암호화한 뒤 UDP로 서버에 전달합니다. 서버는 패킷을 복호화해 Linux network stack으로 넘기고, IP forwarding과 nftables masquerade를 통해 외부 인터넷으로 전달합니다.
 
-운영용 VPN을 목표로 한 프로젝트는 아닙니다. 목표는 VPN의 핵심 데이터 경로를 직접 구현하면서, TUN, route, NAT, UDP transport가 어떻게 맞물리는지 이해하는 것입니다.
+운영용 VPN보다는 데이터 경로를 직접 구현하고 확인하는 데 초점을 둔 프로젝트입니다. TUN, UDP, routing, NAT, Netlink, packet framing과 암호화가 실제로 어떻게 이어지는지 공부하며 기능을 확장하고 있습니다.
 
-- TUN device 설정
-- UDP tunnel transport
-- PSK에서 파생한 AES-GCM key 기반 packet 암호화와 무결성 검증
-- `ALOHA`/`WELCOME` client/server handshake
+- Linux TUN device 생성과 MTU 설정
+- UDP 기반 tunnel transport
+- PSK에서 파생한 AES-256-GCM key로 packet 암호화 및 인증
+- `ALOHA`/`WELCOME` handshake와 peer별 session key
 - peer 등록, tunnel IP 할당, keepalive와 만료 처리
 - sequence number 기반 replay packet 차단
-- full-tunnel route 변경
-- SSH 접속 유지를 위한 자동 bypass route
-- nftables masquerade
-- graceful cleanup
+- full-tunnel route와 SSH 연결 보호용 bypass route
+- IP forwarding과 nftables masquerade
+- non-blocking TUN, `poll`/`eventfd` 기반 빠른 종료
+- 적용 역순 cleanup
 
 ## 현재 상태
 
-마지막으로 검증한 안정 버전은 클라이언트 트래픽을 서버를 통해 외부로 내보낼 수 있습니다. 현재 작업 브랜치에서는 기존 PSK/HMAC packet 인증을 AES-GCM 기반 AEAD 암호화로 교체하고 있습니다.
+2026년 8월 17일 AWS EC2의 client/server 환경에서 다음 흐름을 확인했습니다.
 
-현재까지 sequence number, client/server random, handshake key와 peer별 key 파생, ALOHA 인증, DATA·KEEPALIVE 암복호화가 코드에 반영됐습니다. WELCOME packet의 최종 key/nonce 규격, TUN MTU 재계산, EC2 통합 테스트가 남아 있으므로 AEAD 적용은 아직 완료 상태가 아닙니다.
+- `ALOHA`, `WELCOME`, `DATA`, `KEEPALIVE`의 AES-GCM 인증 및 암복호화
+- `clientRandom`과 `serverRandom`을 사용한 handshake별 key 분리
+- peer ID와 양쪽 random을 사용한 peer별 DATA key 파생
+- TUN MTU와 `MaxPayloadSize`를 `1436`으로 적용
+- VPN 연결 후에도 기존 SSH session과 새 SSH session 유지
+- full-tunnel을 통한 외부 인터넷 통신
+- `api.ipify.org`에서 VPN 서버의 공인 IP 반환
+- `tun0`에서는 HTTP 평문, 외부 NIC의 UDP 9010에서는 암호문 확인
 
-아래 테스트에서 클라이언트 EC2의 공인 IP는 `3.35.200.113`입니다.
-
-```text
-3.35.200.113
+```bash
+curl -s http://api.ipify.org?format=json
 ```
-
-VPN 서버 EC2의 공인 IP는 `54.116.44.5`입니다.
-
-```text
-54.116.44.5
-```
-
-클라이언트의 default route를 `tun0`로 변경한 뒤 `api.ipify.org`를 호출하면 서버 공인 IP가 반환됩니다.
 
 ```json
-{"ip":"54.116.44.5"}
+{"ip":"3.38.43.231"}
 ```
 
-## 동작 흐름
-
-클라이언트는 handshake마다 `clientRandom`을 생성하고, PSK와 `clientRandom`에서 파생한 handshake key로 `ALOHA`를 인증해 서버로 보냅니다.
-
-서버는 ALOHA를 검증한 뒤 클라이언트를 peer로 등록하고 tunnel IP와 `serverRandom`을 할당해 `WELCOME`으로 응답합니다. 양쪽은 `peer ID + clientRandom + serverRandom`에서 같은 peer key를 만들고 이후 DATA와 KEEPALIVE에 사용합니다.
-
-```text
-client
-  -> generate clientRandom
-  -> ALOHA(sequence=1, clientRandom)
-
-server
-  -> authenticate ALOHA
-  -> register peer
-  -> allocate tunnel IP
-  -> generate serverRandom
-  -> WELCOME(peer_id, tunnel_ip, mtu, serverRandom)
-
-client/server
-  -> derive peer key
-  -> exchange encrypted DATA and KEEPALIVE packets
-```
-
-전체 데이터 흐름은 아래와 같습니다.
+## 데이터 흐름
 
 ```text
 ┌──────────────── Client ────────────────┐
-│                                         │
-│  App traffic                            │
-│      │                                  │
-│      ▼                                  │
-│  Kernel route                           │
-│      │                                  │
-│      ▼                                  │
-│  tun0                                   │
-│      │ raw IP packet                    │
-│      ▼                                  │
-│  elevpn client                          │
-│      │ AES-GCM encrypt + authenticate   │
-│      ▼                                  │
-└──────┼──────────────────────────────────┘
-       │ UDP
+│                                        │
+│  Application                           │
+│      │                                 │
+│      ▼                                 │
+│  Kernel route                          │
+│      │                                 │
+│      ▼                                 │
+│  tun0                                  │
+│      │ raw IPv4 packet                 │
+│      ▼                                 │
+│  elevpn client                         │
+│      │ AES-GCM encrypt + authenticate  │
+│      ▼                                 │
+└──────┼─────────────────────────────────┘
+       │ UDP 9010
        ▼
 ┌──────────────── Server ────────────────┐
-│                                         │
-│  elevpn server                          │
-│      │ AES-GCM authenticate + decrypt   │
-│      ▼                                  │
-│  tun0                                   │
-│      │ raw IP packet                    │
-│      ▼                                  │
-│  IP forwarding                          │
-│      ▼                                  │
-│  nftables masquerade                    │
-│      ▼                                  │
-│  Internet                               │
-│                                         │
-└─────────────────────────────────────────┘
+│                                        │
+│  elevpn server                         │
+│      │ authenticate + decrypt          │
+│      ▼                                 │
+│  tun0                                  │
+│      │ raw IPv4 packet                 │
+│      ▼                                 │
+│  IP forwarding                         │
+│      ▼                                 │
+│  nftables masquerade                   │
+│      ▼                                 │
+│  Internet                              │
+│                                        │
+└────────────────────────────────────────┘
 ```
 
-응답 패킷은 서버 TUN 인터페이스와 peer table을 통해 다시 클라이언트로 돌아갑니다.
+응답은 반대 순서로 전달됩니다.
 
 ```text
-internet response
-  -> server
+Internet response
+  -> server external interface
+  -> conntrack/NAT destination restore
   -> server tun0
-  -> destination tunnel IP lookup
-  -> peer UDP address
-  -> client
+  -> destination tunnel IP로 peer 조회
+  -> peer UDP address로 암호화해 전송
+  -> client에서 복호화
   -> client tun0
+  -> application
 ```
 
-## Route 정책
+TUN에서는 항상 평문의 inner IP packet을 다룹니다. 암호화와 복호화는 elevpn이 TUN과 UDP socket 사이에서 수행합니다.
 
-클라이언트는 full-tunnel 방식으로 동작합니다. VPN 연결 후 default route를 `tun0`로 변경해 일반 트래픽을 tunnel로 보냅니다.
+## Handshake
 
-단, tunnel 자체와 원격 접속이 끊기지 않도록 다음 목적지는 기존 gateway/interface로 bypass합니다.
+Handshake는 ALOHA와 WELCOME 두 단계로 진행됩니다.
 
 ```text
-VPN server endpoint /32
-현재 SSH 접속자의 remote IP /32
+Client
+  -> clientRandom 생성
+  -> AlohaCipher(PSK, clientRandom) 생성
+  -> ALOHA(sequence=1) 전송
+
+Server
+  -> clientRandom으로 ALOHA 인증
+  -> peer 등록, tunnel IP 할당
+  -> serverRandom 생성
+  -> WelcomeCipher(PSK, clientRandom, serverRandom) 생성
+  -> WELCOME(sequence=1) 전송
+
+Client / Server
+  -> PeerCipher(PSK, peer ID, clientRandom, serverRandom) 생성
+  -> DATA와 KEEPALIVE 송수신
 ```
 
-SSH remote IP는 `NETLINK_SOCK_DIAG`/`INET_DIAG`로 커널의 현재 TCP socket 목록을 조회해 찾습니다. `local port 22`의 `ESTABLISHED` 연결을 찾고, 해당 연결의 remote IP를 `/32` route로 추가합니다.
+ALOHA와 WELCOME에 서로 다른 key를 사용합니다. WELCOME key에는 서버가 매 handshake마다 생성하는 `serverRandom`이 들어가므로, 동일한 ALOHA가 다시 들어와도 같은 key와 nonce로 서로 다른 WELCOME payload를 암호화하지 않습니다.
+
+## Packet Format
+
+공통 message header는 20바이트입니다.
 
 ```text
-54.116.44.5/32 via 172.31.48.1 dev ens5
-221.167.251.145/32 via 172.31.48.1 dev ens5
-default dev tun0
+0       version
+1       message type
+2       flags
+3       reserved
+4:12    peer ID, uint64, big-endian
+12:20   sequence, uint64, big-endian
 ```
 
-이 방식으로 `sudo` 실행 시 `SSH_CLIENT` 같은 환경변수가 전달되지 않아도 SSH 접속을 유지할 수 있습니다.
-
-## 프로토콜
-
-현재 작업 중인 elevpn packet은 20바이트 고정 header, 가변 payload, 16바이트 AES-GCM 인증 tag로 구성됩니다. header는 암호화하지 않지만 AAD(Additional Authenticated Data)에 포함해 변조 여부를 검증하고, payload는 암호화와 무결성 검증을 함께 수행합니다.
-
-```text
-[message header 20 bytes][encrypted payload variable][AEAD tag 16 bytes]
-```
-
-`message header`:
-
-```text
-0      version
-1      message type
-2      flags
-3      reserved
-4:12   peer ID, uint64, big-endian
-12:20  sequence, uint64, big-endian
-```
-
-nonce는 방향과 sequence를 결합한 12바이트 값입니다.
-
-```text
-0:4   direction, uint32, big-endian
-4:12  sequence, uint64, big-endian
-```
-
-송신자는 packet을 보낼 때마다 자신의 sequence를 증가시킵니다. 수신자는 peer/session별 마지막 sequence보다 작거나 같은 packet을 replay packet으로 버립니다. 현재 구현은 단순 단조 증가 방식이며, UDP packet 순서 역전을 허용하는 sliding replay window는 아직 적용하지 않았습니다.
-
-message type:
+Message type:
 
 ```text
 1  ALOHA
@@ -173,60 +139,110 @@ message type:
 4  KEEPALIVE
 ```
 
-현재 작업 중인 `WELCOME` payload:
+### DATA / KEEPALIVE
 
 ```text
-0:4   client tunnel IPv4
-4:6   tunnel MTU, uint16, big-endian
-6:22  server random, 16 bytes
+[header 20][encrypted payload variable][AEAD tag 16]
 ```
 
-`DATA` payload:
+Header는 암호화하지 않지만 AAD(Additional Authenticated Data)로 인증합니다. DATA payload에는 TUN에서 읽은 raw IPv4 packet이 들어갑니다.
+
+### ALOHA
 
 ```text
-TUN interface에서 읽은 raw IPv4 packet
+[header 20][clientRandom 16][encrypted payload][AEAD tag 16]
+└──────────────── AAD ────────────────┘
 ```
 
-ALOHA는 서버가 handshake key를 만들 수 있도록 `clientRandom`을 평문으로 전달하되, header와 함께 AAD로 인증합니다.
+서버가 ALOHA key를 만들 수 있도록 `clientRandom`은 평문으로 전달하며, header와 함께 AAD에 넣어 변조를 검증합니다.
+
+### WELCOME
 
 ```text
-[message header 20][client random 16][encrypted payload][AEAD tag 16]
+[header 20][serverRandom 16][encrypted WELCOME payload][AEAD tag 16]
+└──────────────── AAD ────────────────┘
 ```
 
-key 파생은 다음 입력을 사용합니다.
+클라이언트가 WELCOME key를 만들 수 있도록 `serverRandom`은 평문으로 전달하며 AAD로 인증합니다.
+
+복호화된 WELCOME payload는 6바이트입니다.
 
 ```text
-master key    = SHA-256(PSK)
-handshake key = HMAC-SHA256(master key, client random)
-peer key      = HMAC-SHA256(master key, peer ID || client random || server random)
+0:4  client tunnel IPv4
+4:6  tunnel MTU, uint16, big-endian
 ```
 
-현재 설정된 tunnel MTU는 아직 `1460`입니다. 그러나 DATA packet에 AEAD를 적용하면 IPv4 기준 outer packet 크기는 다음과 같습니다.
+## Key와 Nonce
+
+현재 key 파생 입력은 다음과 같습니다.
 
 ```text
-outer IPv4 header   20 bytes
-UDP header           8 bytes
-elevpn header       20 bytes
-AEAD tag            16 bytes
-----------------------------
-overhead            64 bytes
-
-1500 - 64 = 1436
+master key  = SHA-256(PSK)
+ALOHA key   = HMAC-SHA256(master key, clientRandom)
+WELCOME key = HMAC-SHA256(master key, clientRandom || serverRandom)
+peer key    = HMAC-SHA256(master key,
+                          peer ID || clientRandom || serverRandom)
 ```
 
-따라서 일반적인 MTU 1500 경로에서 outer IP fragmentation을 피하려면 TUN MTU와 `MaxPayloadSize`를 `1436` 이하로 조정해야 합니다. 이 변경과 실제 경로 검증은 AEAD 마무리 단계에 포함돼 있습니다.
+AES-GCM nonce는 방향과 sequence를 결합한 12바이트 값입니다.
 
-## 빌드
+```text
+0:4   direction, uint32, big-endian
+4:12  sequence, uint64, big-endian
+```
 
-Linux x86_64용 빌드:
+클라이언트와 서버는 송신 sequence와 마지막 수신 sequence를 방향별로 따로 관리합니다. 현재는 수신 sequence가 마지막 값보다 작거나 같으면 replay packet으로 버립니다.
+
+## MTU
+
+외부 IPv4 경로의 MTU를 1500으로 가정하고 DATA packet의 최대 크기를 계산합니다.
+
+```text
+outer IPv4 header        20 bytes
+UDP header                8 bytes
+elevpn header            20 bytes
+encrypted inner packet 1436 bytes
+AEAD tag                 16 bytes
+---------------------------------
+outer IPv4 packet      1500 bytes
+```
+
+```text
+1500 - 20 - 8 - 20 - 16 = 1436
+```
+
+계산한 `1436`을 TUN MTU와 `MaxPayloadSize`로 사용해 일반적인 MTU 1500 경로에서 elevpn DATA packet 때문에 외부 IP fragmentation이 발생하지 않도록 했습니다.
+
+## Route 정책
+
+클라이언트는 VPN 연결 후 default route를 `tun0`로 변경하는 full-tunnel 방식으로 동작합니다.
+
+다만 UDP tunnel과 SSH 접속이 끊기지 않도록 다음 주소는 기존 gateway와 interface로 우회합니다.
+
+```text
+VPN server endpoint /32
+현재 SSH 접속자의 remote IP /32
+```
+
+SSH remote IP는 `NETLINK_SOCK_DIAG`/`INET_DIAG`로 커널의 TCP socket 목록을 조회해 찾습니다. `local port 22`의 `ESTABLISHED` 연결을 찾아 remote IP를 `/32` route로 추가하므로 `sudo`가 `SSH_CLIENT` 환경변수를 전달하지 않는 경우에도 동작합니다.
+
+```text
+<server-ip> via <gateway> dev <real-nic>
+<ssh-client-ip> via <gateway> dev <real-nic>
+default dev tun0
+```
+
+## Build
+
+Linux x86_64:
 
 ```bash
 GOOS=linux GOARCH=amd64 go build -o bin/elevpn .
 ```
 
-프로그램은 TUN device 생성, route 변경, IP forwarding 설정, nftables rule 적용을 수행하므로 권한이 필요합니다. 아래 예시는 `sudo`로 실행합니다.
+TUN 생성, route 변경, IP forwarding과 nftables 설정에 관리자 권한이 필요합니다.
 
-## 실행
+## Run
 
 서버:
 
@@ -237,172 +253,99 @@ sudo ./elevpn server --psk test-secret
 클라이언트:
 
 ```bash
-sudo ./elevpn client --server-endpoint=54.116.44.5:9010 --psk test-secret
+sudo ./elevpn client \
+  --server-endpoint=<server-public-ip>:9010 \
+  --psk test-secret
 ```
 
-`--psk`는 서버와 클라이언트가 같은 값을 사용해야 합니다. 기본값 `test-secret`은 테스트 편의를 위한 값입니다.
+서버와 클라이언트는 같은 PSK를 사용해야 합니다. 기본값 `test-secret`은 테스트 편의를 위한 값이며 운영 환경에 적합하지 않습니다.
 
-## 테스트 실행 로그
+## Verification
 
-아래 로그와 네트워크 상태는 현재 AEAD 전환을 시작하기 전에 EC2에서 검증한 안정 버전의 기록입니다. 이 기록에서는 handshake, peer 관리, keepalive, full-tunnel route, NAT와 cleanup까지 확인했습니다. AEAD 작업 브랜치는 WELCOME packet 규격과 MTU 조정을 마친 뒤 같은 절차로 다시 검증할 예정입니다.
+### 외부 IP
 
-서버 로그:
-
-```text
-[ec2-user@ip-172-31-52-136 ~]$ sudo ./elevpn server --psk test-secret
-2026/08/03 13:12:29 [init] listen=0.0.0.0:9010 tun-name=tun0 vpn-network-cidr=10.77.0.0/24
-2026/08/03 13:12:29 [route] default interface=ens5 index=2 gateway="172.31.48.1"
-2026/08/03 13:12:44 [handshake] received ALOHA from 3.35.200.113:47624
-2026/08/03 13:12:44 [handshake] registered peer id=1 tunnel_ip=10.77.0.2 mtu=1460
-2026/08/03 13:12:44 [handshake] sent WELCOME peer_id=1 tunnel_ip=10.77.0.2 mtu=1460
-2026/08/03 13:12:54 [keepalive] peer_id=1 last_seen updated
+```bash
+curl -s http://api.ipify.org?format=json
 ```
 
-클라이언트 로그:
+EC2 검증 결과:
 
-```text
-[ec2-user@ip-172-31-50-229 ~]$ sudo ./elevpn client --server-endpoint=54.116.44.5:9010 --psk test-secret
-2026/08/03 13:12:44 [init] listen=:0 endpoint=54.116.44.5:9010 tunName=tun0
-2026/08/03 13:12:44 [handshake] sent ALOHA to 54.116.44.5:9010
-2026/08/03 13:12:44 [handshake] received WELCOME peer_id=1 tunnel_ip=10.77.0.2 mtu=1460
-2026/08/03 13:12:44 [route] default interface=ens5 index=2 gateway="172.31.48.1"
-2026/08/03 13:12:44 [route] detected ssh bypass cidrs=[54.116.44.5/32 221.167.251.145/32]
+```json
+{"ip":"3.38.43.231"}
 ```
 
-## 인터페이스 상태
+VPN 서버의 공인 IP가 반환되어 client traffic이 tunnel과 서버 NAT를 거쳐 외부로 나간 것을 확인했습니다.
 
-서버 TUN 인터페이스:
+### TUN 평문
 
-```text
-[ec2-user@ip-172-31-52-136 ~]$ ip addr show tun0
-11: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1460 qdisc fq_codel state UNKNOWN group default qlen 500
-    link/none
-    inet 10.77.0.1/24 scope global tun0
-       valid_lft forever preferred_lft forever
-    inet6 fe80::1b5c:be8e:70f9:dbed/64 scope link stable-privacy proto kernel_ll
-       valid_lft forever preferred_lft forever
+```bash
+sudo tcpdump -ni tun0 -s 0 -A 'tcp port 80'
 ```
 
-클라이언트 TUN 인터페이스:
+`tun0`에서는 복호화된 HTTP 응답을 확인할 수 있습니다.
 
-```text
-[ec2-user@ip-172-31-50-229 ~]$ ip addr show tun0
-8: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1460 qdisc fq_codel state UNKNOWN group default qlen 500
-    link/none
-    inet 10.77.0.2/32 scope global tun0
-       valid_lft forever preferred_lft forever
-    inet6 fe80::4591:5d54:ec2a:9ddc/64 scope link stable-privacy proto kernel_ll
-       valid_lft forever preferred_lft forever
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"ip":"3.38.43.231"}
 ```
 
-## 라우트 상태
+### UDP 암호문
 
-서버 라우트:
-
-```text
-[ec2-user@ip-172-31-52-136 ~]$ ip route show
-default via 172.31.48.1 dev ens5 proto dhcp src 172.31.52.136 metric 512
-10.77.0.0/24 dev tun0 proto kernel scope link src 10.77.0.1
-172.31.0.2 via 172.31.48.1 dev ens5 proto dhcp src 172.31.52.136 metric 512
-172.31.48.0/20 dev ens5 proto kernel scope link src 172.31.52.136 metric 512
-172.31.48.1 dev ens5 proto dhcp scope link src 172.31.52.136 metric 512
+```bash
+sudo tcpdump -ni <real-nic> -s 0 -XX 'udp port 9010'
 ```
 
-클라이언트 라우트:
+캡처한 DATA packet 중 하나는 다음 값을 가졌습니다.
 
 ```text
-[ec2-user@ip-172-31-50-229 ~]$ ip route show
-default dev tun0 proto static scope link
-default via 172.31.48.1 dev ens5 proto dhcp src 172.31.50.229 metric 512
-54.116.44.5 via 172.31.48.1 dev ens5 proto static
-172.31.0.2 via 172.31.48.1 dev ens5 proto dhcp src 172.31.50.229 metric 512
-172.31.48.0/20 dev ens5 proto kernel scope link src 172.31.50.229 metric 512
-172.31.48.1 dev ens5 proto dhcp scope link src 172.31.50.229 metric 512
-221.167.251.145 via 172.31.48.1 dev ens5 proto static
+UDP payload length  96
+protocol version     1
+message type         3 (DATA)
+peer ID              1
+sequence             65
 ```
 
-VPN 서버 endpoint와 SSH 접속자의 remote IP는 tunnel 밖으로 유지합니다.
+20바이트 elevpn header 뒤에는 암호화된 inner packet과 16바이트 AEAD tag가 이어졌습니다. 외부 NIC의 UDP payload에서는 `GET`, `Host`, `api.ipify.org`와 응답 JSON 같은 HTTP 평문이 나타나지 않았습니다.
 
-```text
-54.116.44.5 via 172.31.48.1 dev ens5 proto static
-221.167.251.145 via 172.31.48.1 dev ens5 proto static
+### 네트워크 상태
+
+```bash
+ip addr show dev tun0
+ip route show table main
+cat /proc/sys/net/ipv4/ip_forward
+sudo nft list table ip vpnnat
+sudo ss -lunp | grep 9010
 ```
 
-이 예외 route가 있어야 default route가 `tun0`를 사용하더라도 UDP tunnel과 SSH 접속이 유지됩니다.
-
-## NAT Rule
-
-서버는 VPN network에 대해 nftables masquerade rule을 생성합니다.
+서버가 만드는 NAT rule의 형태는 다음과 같습니다.
 
 ```text
-[ec2-user@ip-172-31-52-136 ~]$ sudo nft list ruleset
 table ip vpnnat {
         chain vpn-postrouting {
                 type nat hook postrouting priority srcnat; policy accept;
-                ip saddr 10.77.0.0/24 oifname "ens5" masquerade
+                ip saddr 10.77.0.0/24 oifname "<real-nic>" masquerade
         }
 }
 ```
 
-이 nftables rule은 `10.77.0.0/24`에서 나온 패킷이 `ens5`를 통해 외부로 나갈 때, 출발지 주소를 서버 외부 인터페이스 주소로 masquerade합니다.
-
-## 외부 IP 테스트
-
-full-tunnel 적용 후에는 별도 테스트 route 없이 외부 IP를 조회합니다.
-
-```bash
-curl -s https://api.ipify.org?format=json
-```
-
-결과:
-
-```json
-{"ip":"54.116.44.5"}
-```
-
-응답 IP가 VPN 서버의 공인 IP라면, 클라이언트 요청이 tunnel을 거쳐 서버에서 외부로 나간 것입니다.
-
-## Cleanup
-
-클라이언트 종료:
-
-```text
-^C2026/08/03 13:18:00 [Route] elapsed time: 509.09µs
-2026/08/03 13:18:00 [tun0] tun interface close
-2026/08/03 13:18:00 [tun0] elapsed time: 59.091121ms
-2026/08/03 13:18:00 uptime: 5m16.476614408s
-```
-
-서버 종료:
-
-```text
-^C2026/08/03 13:18:15 runTunnel end (context.Canceled)
-2026/08/03 13:18:15 [Masquerade (vpnnat)] elapsed time: 16.14482ms
-2026/08/03 13:18:15 [IPForward] elapsed time: 152.742µs
-2026/08/03 13:18:15 [tun0] tun interface close
-2026/08/03 13:18:15 [tun0] elapsed time: 39.847988ms
-2026/08/03 13:18:15 uptime: 5m46.301056623s
-```
-
-## 메모
-
-현재 제한사항:
+## 현재 제한사항
 
 - IPv4만 지원
-- 현재 WELCOME은 handshake key를 사용하므로, 동일 ALOHA가 재전송되면 같은 key/nonce로 서로 다른 WELCOME을 만들 위험이 있음
-- 현재 sequence 검증은 단순 단조 증가 방식이라 UDP packet 순서 역전을 허용하지 않음
-- AEAD overhead를 반영한 TUN MTU와 `MaxPayloadSize` 조정이 아직 남아 있음
-- 현재 AEAD 작업 브랜치는 EC2 end-to-end 테스트 전 상태
-- DNS 설정 없음
+- PSK를 CLI로 공유하며 별도의 배포·교체 체계가 없음
+- 단순 단조 증가 sequence 검증이라 순서가 뒤바뀐 정상 UDP packet도 버림
+- 캡처한 ALOHA의 반복 전송을 제한하는 handshake rate limit 없음
+- DNS 설정을 별도로 변경하지 않음
 - 영구 설정 파일 없음
-- PSK 배포/교체 구조 없음
 - SSH 자동 bypass는 TCP local port 22 기준
+- route 적용 중 부분 실패에 대한 내부 rollback 보강 필요
+- protocol과 end-to-end 자동 테스트 보강 필요
 
-다음 작업:
+## 다음 작업
 
-- WELCOME에 `serverRandom`을 명시적으로 전달하고 peer key로 암호화하는 handshake 규격 완성
-- TUN MTU와 `MaxPayloadSize`를 `1436` 이하로 조정하고 실제 경로에서 검증
-- 잘못된 PSK, packet 변조, replay와 nonce 재사용을 검증하는 protocol test 추가
-- UDP packet 순서 역전을 허용하는 sliding replay window 검토
-- EC2 또는 Linux network namespace 기반 통합 테스트 스크립트 추가
-- 부분 실패 상황에서 route rollback 동작 개선
+- out-of-order UDP packet을 허용하는 sliding replay window
+- handshake replay 제한과 rate limit
+- 잘못된 PSK, packet 변조, replay, nonce 재사용에 대한 protocol test
+- Linux network namespace 기반 end-to-end test
+- route 부분 실패 rollback 개선
