@@ -16,8 +16,8 @@ type handshakeResult struct {
 
 	cipher *protocol.Cipher
 
-	clientSequence uint64
-	serverSequence uint64
+	clientSequence     uint64
+	serverReplayWindow protocol.ReplayWindow
 }
 
 // context 처리
@@ -71,6 +71,11 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 		return handshakeResult{}, fmt.Errorf("invalid welcome sequence: expected=%d actual=%d", expectedWelcomeSequence, message.Sequence)
 	}
 
+	var serverReplayWindow protocol.ReplayWindow
+	if err := serverReplayWindow.Accept(message.Sequence); err != nil {
+		return handshakeResult{}, fmt.Errorf("invalid replay window sequence=%d: %w", message.Sequence, err)
+	}
+
 	welcomePayload, err := protocol.DecodeWelcomePayload(message.Payload)
 	if err != nil {
 		return handshakeResult{}, err
@@ -88,8 +93,8 @@ func (c *Client) handshake(conn *net.UDPConn) (handshakeResult, error) {
 
 		cipher: peerCipher,
 
-		clientSequence: 1,
-		serverSequence: message.Sequence,
+		clientSequence:     1,
+		serverReplayWindow: serverReplayWindow,
 	}
 	log.Printf("[handshake] received WELCOME peer_id=%d tunnel_ip=%s mtu=%d", result.peerID, result.tunnelIP.String(), result.mtu)
 

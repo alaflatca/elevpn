@@ -2,6 +2,7 @@ package server
 
 import (
 	"elevpn/internal/protocol"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -18,7 +19,7 @@ type peer struct {
 	cipher *protocol.Cipher
 
 	serverSendSequence uint64
-	lastClientSequence uint64
+	clientReplayWindow protocol.ReplayWindow
 }
 
 func (p *peer) setCipher(cipher *protocol.Cipher) {
@@ -47,10 +48,10 @@ func (p *peer) acceptClientSequence(seq uint64) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if seq <= p.lastClientSequence {
-		return ErrReplayPacket
+	if err := p.clientReplayWindow.Accept(seq); err != nil {
+		return fmt.Errorf("client sequence rejected: sequence=%d: %w", seq, err)
 	}
-	p.lastClientSequence = seq
+
 	return nil
 }
 

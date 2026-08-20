@@ -27,7 +27,7 @@ type session struct {
 	cipher *protocol.Cipher
 
 	clientSendSequence uint64
-	lastServerSequence uint64
+	serverReplayWindow protocol.ReplayWindow
 }
 
 func (s *session) run(ctx context.Context) error {
@@ -199,9 +199,9 @@ func (sess *session) acceptServerSequence(seq uint64) error {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
-	if seq <= sess.lastServerSequence {
-		return fmt.Errorf("replay server packet: last=%d actual=%d", sess.lastServerSequence, seq)
+	if err := sess.serverReplayWindow.Accept(seq); err != nil {
+		return fmt.Errorf("server sequence rejected: sequence=%d: %w", seq, err)
 	}
-	sess.lastServerSequence = seq
+
 	return nil
 }

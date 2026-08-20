@@ -249,6 +249,10 @@ func handlePacketError(prefix string, err error) error {
 		log.Printf("[%s] replay packet: %v", prefix, err)
 		return nil
 	}
+	if errors.Is(err, protocol.ErrDuplicateSequence) || errors.Is(err, protocol.ErrSequenceTooOld) {
+		log.Printf("[%s] replay packet: %v", prefix, err)
+		return nil
+	}
 	return err
 }
 

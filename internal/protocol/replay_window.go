@@ -47,7 +47,7 @@ func (rw *ReplayWindow) Accept(sequence uint64) error {
 		if offset >= replayWindowSize {
 			return fmt.Errorf("%w: highest=%d actual=%d", ErrSequenceTooOld, rw.highest, sequence)
 		}
-		mask := uint64(1) << offset // 시퀀스 값들의 차의 수 만큼 비트 연산으로, 몇 번쨰 비트인지 확인
+		mask := uint64(1) << offset // 시퀀스 값들의 차의 수 만큼 비트 연산으로, 몇 번째 비트인지 확인
 		if rw.bitmap&mask != 0 {    // 이미 있는 sequence
 			return fmt.Errorf("%w: sequence=%d", ErrDuplicateSequence, sequence)
 		}

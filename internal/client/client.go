@@ -122,7 +122,7 @@ func (c *Client) Run(ctx context.Context) error {
 		cipher: result.cipher,
 
 		clientSendSequence: result.clientSequence,
-		lastServerSequence: result.serverSequence,
+		serverReplayWindow: result.serverReplayWindow,
 	}
 
 	return session.run(ctx)
