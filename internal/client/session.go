@@ -97,12 +97,15 @@ func (sess *session) udpToTun(ctx context.Context) error {
 		if n > 0 {
 			packet, err := sess.cipher.DecodePacket(buf[:n], protocol.DirectionServerToClient)
 			if err != nil {
-				return err
+				log.Printf("[udpToTun] failed to decode server packet: %v", err)
+				continue
 			}
 			if packet.Type != protocol.MessageTypeData {
-				return fmt.Errorf("unexpected message type: expected=%d actual=%d", protocol.MessageTypeData, packet.Type)
+				log.Printf("[udpToTun] unexpected message type: expected=%d actual=%d", protocol.MessageTypeData, packet.Type)
+				continue
 			}
 			if err := sess.acceptServerSequence(packet.Sequence); err != nil {
+				log.Printf("[udpToTun] dropped server packet: %v", err)
 				continue
 			}
 			written, err := sess.tun.WriteContext(ctx, packet.Payload)

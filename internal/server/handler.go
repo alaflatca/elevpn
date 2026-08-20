@@ -21,9 +21,13 @@ func (s *Server) handleAloha(conn *net.UDPConn, peerAddr *net.UDPAddr, msg *prot
 		return errors.New("peer addr is nil")
 	}
 
-	peer, err := s.peers.register(peerAddr)
+	peer, created, err := s.peers.register(peerAddr, clientRandom)
 	if err != nil {
 		return err
+	}
+	if !created {
+		log.Printf("[handshake] ALOHA already processed: peer_id=%d addr=%s", peer.id, peerAddr)
+		return nil
 	}
 	log.Printf("[handshake] received ALOHA from %s", peerAddr.String())
 

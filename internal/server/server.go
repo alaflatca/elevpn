@@ -245,8 +245,8 @@ func handlePacketError(prefix string, err error) error {
 		log.Printf("[%s] drop packet: %v", prefix, err)
 		return nil
 	}
-	if errors.Is(err, ErrReplayPacket) {
-		log.Printf("[%s] replay packet: %v", prefix, err)
+	if errors.Is(err, protocol.ErrInvalidSequence) {
+		log.Printf("[%s] drop packet with invalid sequence: %v", prefix, err)
 		return nil
 	}
 	if errors.Is(err, protocol.ErrDuplicateSequence) || errors.Is(err, protocol.ErrSequenceTooOld) {

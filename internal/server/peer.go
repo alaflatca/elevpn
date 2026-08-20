@@ -10,16 +10,18 @@ import (
 )
 
 type peer struct {
-	mu       sync.RWMutex
-	id       uint64
-	addr     *net.UDPAddr
-	tunnelIP netip.Addr
-	lastSeen time.Time
+	mu           sync.RWMutex
+	id           uint64
+	addr         *net.UDPAddr
+	tunnelIP     netip.Addr
+	clientRandom protocol.HandshakeRandom
 
 	cipher *protocol.Cipher
 
 	serverSendSequence uint64
 	clientReplayWindow protocol.ReplayWindow
+
+	lastSeen time.Time
 }
 
 func (p *peer) setCipher(cipher *protocol.Cipher) {

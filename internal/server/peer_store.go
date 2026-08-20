@@ -1,6 +1,7 @@
 package server
 
 import (
+	"elevpn/internal/protocol"
 	"fmt"
 	"log"
 	"net"
@@ -12,37 +13,46 @@ import (
 type peerStore struct {
 	mu sync.RWMutex
 
-	byID       map[uint64]*peer
-	byTunnelIP map[netip.Addr]*peer
-	nextID     uint64
+	byID           map[uint64]*peer
+	byTunnelIP     map[netip.Addr]*peer
+	byClientRandom map[protocol.HandshakeRandom]*peer
+
+	nextID uint64
 }
 
 func newPeerStore() *peerStore {
 	return &peerStore{
-		byID:       make(map[uint64]*peer),
-		byTunnelIP: make(map[netip.Addr]*peer),
-		nextID:     1,
+		byID:           make(map[uint64]*peer),
+		byTunnelIP:     make(map[netip.Addr]*peer),
+		byClientRandom: make(map[protocol.HandshakeRandom]*peer),
+		nextID:         1,
 	}
 }
 
-func (ps *peerStore) register(addr *net.UDPAddr) (*peer, error) {
+func (ps *peerStore) register(addr *net.UDPAddr, clientRandom protocol.HandshakeRandom) (*peer, bool, error) {
 	if addr == nil {
-		return nil, fmt.Errorf("register addr is nil")
+		return nil, false, fmt.Errorf("register addr is nil")
 	}
 
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
+	if p, exists := ps.byClientRandom[clientRandom]; exists {
+		return p, false, nil
+	}
+
 	id := ps.nextID
 	p := &peer{
-		id:       id,
-		addr:     addr,
-		lastSeen: time.Now(),
+		id:           id,
+		addr:         addr,
+		clientRandom: clientRandom,
+		lastSeen:     time.Now(),
 	}
-	ps.byID[id] = p
-
 	ps.nextID++
-	return p, nil
+	ps.byID[id] = p
+	ps.byClientRandom[clientRandom] = p
+
+	return p, true, nil
 }
 
 func (ps *peerStore) getByID(id uint64) (*peer, error) {
@@ -110,6 +120,7 @@ func (ps *peerStore) deleteExpired(now time.Time, timeout time.Duration) int {
 			tunnelIP := peer.tunnelIPSnapshot()
 			delete(ps.byID, id)
 			delete(ps.byTunnelIP, tunnelIP)
+			delete(ps.byClientRandom, peer.clientRandom)
 			deleteCount++
 		}
 	}
