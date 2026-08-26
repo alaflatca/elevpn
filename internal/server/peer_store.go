@@ -37,7 +37,7 @@ func (ps *peerStore) register(addr *net.UDPAddr, clientRandom protocol.Handshake
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
-	if p, exists := ps.byClientRandom[clientRandom]; exists {
+	if p, found := ps.byClientRandom[clientRandom]; found {
 		return p, false, nil
 	}
 
