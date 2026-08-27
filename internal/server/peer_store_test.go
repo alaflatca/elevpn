@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestPeerStoreRegisterNewAndDuplicatePeer(t *testing.T) {
@@ -17,7 +19,7 @@ func TestPeerStoreRegisterNewAndDuplicatePeer(t *testing.T) {
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
 	if err != nil {
-		t.Fatalf("invalid resolve udp addr: %v", err)
+		t.Fatalf("failed to resolve UDP address: %v", err)
 	}
 
 	firstPeer, created, err := ps.register(addr, random)
@@ -74,11 +76,11 @@ func TestPeerStoreRegisterDifferentClientRandom(t *testing.T) {
 
 	firstAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
 	if err != nil {
-		t.Fatalf("invalid resolve udp first addr: %v", err)
+		t.Fatalf("failed to resolve UDP first address: %v", err)
 	}
 	secondAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
 	if err != nil {
-		t.Fatalf("invalid resolve udp second addr: %v", err)
+		t.Fatalf("failed to resolve UDP second address: %v", err)
 	}
 
 	firstPeer, created, err := ps.register(firstAddr, firstRandom)
@@ -174,7 +176,7 @@ func TestPeerStoreGetByIDReturnsRegisteredPeer(t *testing.T) {
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
 	if err != nil {
-		t.Fatalf("invalid resolve udp addr: %v", err)
+		t.Fatalf("failed to resolve UDP address: %v", err)
 	}
 
 	peer, created, err := ps.register(addr, random)
@@ -220,7 +222,7 @@ func TestPeerStoreSetAndGetByTunnelIP(t *testing.T) {
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
 	if err != nil {
-		t.Fatalf("invalid resolve udp first addr: %v", err)
+		t.Fatalf("failed to resolve UDP address: %v", err)
 	}
 
 	peer, created, err := ps.register(addr, random)
@@ -268,7 +270,7 @@ func TestPeerStoreSetTunnelIPRejectsDuplicateIP(t *testing.T) {
 
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
 	if err != nil {
-		t.Fatalf("invalid resolve udp first addr: %v", err)
+		t.Fatalf("failed to resolve UDP address: %v", err)
 	}
 
 	firstPeer, created, err := ps.register(addr, firstRandom)
@@ -316,6 +318,248 @@ func TestPeerStoreSetTunnelIPRejectsDuplicateIP(t *testing.T) {
 	}
 	if len(ps.byTunnelIP) != 1 {
 		t.Fatalf("expected one tunnel IP mapping, got: %d", len(ps.byTunnelIP))
+	}
+}
+
+func TestPeerStoreDeleteExpiredKeepsActivePeer(t *testing.T) {
+	ps := newPeerStore()
+	random := protocol.HandshakeRandom{
+		1, 2, 3, 4, 5, 6, 7, 8, 9,
+		10, 11, 12, 13, 14, 15, 16,
+	}
+
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
+	if err != nil {
+		t.Fatalf("failed to resolve UDP address: %v", err)
+	}
+
+	peer, created, err := ps.register(addr, random)
+	if err != nil {
+		t.Fatalf("failed to register peer: addr=%v random=%v: %v", addr, random, err)
+	}
+	if !created {
+		t.Fatal("expected a new peer to be created")
+	}
+	if peer == nil {
+		t.Fatal("expected registered peer, got nil")
+	}
+
+	tunnelIP := netip.MustParseAddr("10.77.0.2")
+	if err := ps.setTunnelIP(peer.id, tunnelIP); err != nil {
+		t.Fatalf("failed to set tunnel IP: peer_id=%d ip=%s: %v", peer.id, tunnelIP, err)
+	}
+
+	timeout := 30 * time.Second
+	now := peer.lastSeen.Add(20 * time.Second)
+
+	deletedCount := ps.deleteExpired(now, timeout)
+	if deletedCount != 0 {
+		t.Fatalf("expected deleted count to be 0, got=%d", deletedCount)
+	}
+	if len(ps.byID) != 1 {
+		t.Fatalf("expected one by ID mapping, got=%d", len(ps.byID))
+	}
+	if len(ps.byClientRandom) != 1 {
+		t.Fatalf("expected one clientRandom mapping, got=%d", len(ps.byClientRandom))
+	}
+	if len(ps.byTunnelIP) != 1 {
+		t.Fatalf("expected one tunnel IP mapping, got: %d", len(ps.byTunnelIP))
+	}
+}
+
+func TestPeerStoreDeleteExpiredRemovesPeer(t *testing.T) {
+	ps := newPeerStore()
+	random := protocol.HandshakeRandom{
+		1, 2, 3, 4, 5, 6, 7, 8, 9,
+		10, 11, 12, 13, 14, 15, 16,
+	}
+
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
+	if err != nil {
+		t.Fatalf("failed to resolve UDP address: %v", err)
+	}
+
+	peer, created, err := ps.register(addr, random)
+	if err != nil {
+		t.Fatalf("failed to register peer: addr=%v random=%v: %v", addr, random, err)
+	}
+	if !created {
+		t.Fatal("expected a new peer to be created")
+	}
+	if peer == nil {
+		t.Fatal("expected registered peer, got nil")
+	}
+
+	tunnelIP := netip.MustParseAddr("10.77.0.2")
+	if err := ps.setTunnelIP(peer.id, tunnelIP); err != nil {
+		t.Fatalf("failed to set tunnel IP: peer_id=%d ip=%s: %v", peer.id, tunnelIP, err)
+	}
+
+	timeout := 30 * time.Second
+	now := peer.lastSeen.Add(40 * time.Second)
+
+	deletedCount := ps.deleteExpired(now, timeout)
+	if deletedCount != 1 {
+		t.Fatalf("expected deleted count to be 1, got=%d", deletedCount)
+	}
+	if len(ps.byID) != 0 {
+		t.Fatalf("expected zero by ID mapping, got=%d", len(ps.byID))
+	}
+	if len(ps.byClientRandom) != 0 {
+		t.Fatalf("expected zero clientRandom mapping, got=%d", len(ps.byClientRandom))
+	}
+	if len(ps.byTunnelIP) != 0 {
+		t.Fatalf("expected zero tunnel IP mapping, got: %d", len(ps.byTunnelIP))
+	}
+}
+
+func TestPeerStoreDeleteExpiredRemovesNilPeer(t *testing.T) {
+	ps := newPeerStore()
+	ps.byID[1] = nil
+
+	deleteCount := ps.deleteExpired(time.Now(), 30*time.Second)
+	if deleteCount != 1 {
+		t.Fatalf("expected one nil peer to be removed, got:%d", deleteCount)
+	}
+	if len(ps.byID) != 0 {
+		t.Fatalf("expected byID to be empty, got: %d", len(ps.byID))
+	}
+}
+
+type registerResult struct {
+	peer    *peer
+	created bool
+	err     error
+}
+
+func TestPeerStoreRegisterConcurrentPeers(t *testing.T) {
+	ps := newPeerStore()
+
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
+	if err != nil {
+		t.Fatalf("failed to resolve UDP address: %v", err)
+	}
+
+	var wg sync.WaitGroup
+
+	count := 10
+	results := make(chan registerResult, count)
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+
+			var random protocol.HandshakeRandom
+			random[0] = byte(i + 1)
+
+			peer, created, err := ps.register(addr, random)
+			results <- registerResult{
+				peer:    peer,
+				created: created,
+				err:     err,
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(results)
+
+	seenIDs := make(map[uint64]struct{}, count)
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("failed to register peer concurrently: %v", result.err)
+		}
+		if !result.created {
+			t.Fatal("expected a new peer to be created")
+		}
+		if result.peer == nil {
+			t.Fatal("expected registered peer, got nil")
+		}
+
+		if _, exists := seenIDs[result.peer.id]; exists {
+			t.Fatalf("expected unique peer ID, got duplicate: id=%d", result.peer.id)
+		}
+		seenIDs[result.peer.id] = struct{}{}
+	}
+
+	if len(ps.byID) != count {
+		t.Fatalf("expected %d peers in byID, got: %d", count, len(ps.byID))
+	}
+	if len(ps.byClientRandom) != count {
+		t.Fatalf("expected %d peers in byClientRandom, got: %d", count, len(ps.byClientRandom))
+	}
+	expectedNextID := uint64(count + 1)
+	if ps.nextID != expectedNextID {
+		t.Fatalf("expected nextID to be %d, got=%d", expectedNextID, ps.nextID)
+	}
+}
+
+func TestPeerStoreRegisterConcurrentDuplicatePeer(t *testing.T) {
+	ps := newPeerStore()
+	random := protocol.HandshakeRandom{
+		1, 2, 3, 4, 5, 6, 7, 8, 9,
+		10, 11, 12, 13, 14, 15, 16,
+	}
+
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9010")
+	if err != nil {
+		t.Fatalf("failed to resolve UDP address: %v", err)
+	}
+
+	count := 10
+	wg := sync.WaitGroup{}
+	results := make(chan registerResult, count)
+
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			peer, created, err := ps.register(addr, random)
+			results <- registerResult{
+				peer:    peer,
+				created: created,
+				err:     err,
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	createdCount := 0
+	var registeredPeer *peer
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("failed to register peer concurrently: %v", result.err)
+		}
+		if result.peer == nil {
+			t.Fatal("expected registered peer, got nil")
+		}
+		if result.created {
+			createdCount++
+		}
+
+		if registeredPeer == nil {
+			registeredPeer = result.peer
+		} else if registeredPeer != result.peer {
+			t.Fatal("expected all registrations to return the same peer")
+		}
+	}
+
+	if createdCount != 1 {
+		t.Fatalf("expected exactly one peer to be created, got: %d", createdCount)
+	}
+
+	if len(ps.byID) != 1 {
+		t.Fatalf("expected one peer in byID, got: %d", len(ps.byID))
+	}
+	if len(ps.byClientRandom) != 1 {
+		t.Fatalf("expected one peer in byClientRandom, got: %d", len(ps.byClientRandom))
+	}
+	if ps.nextID != 2 {
+		t.Fatalf("expected nextID to be 2, got: %d", ps.nextID)
 	}
 
 }
