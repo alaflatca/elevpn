@@ -37,21 +37,6 @@ func DelHostRoute(ipv4, gateway net.IP, ifIndex int) error {
 	return recvAcks(fd, 1)
 }
 
-func RestoreDefaultRoute(gateway net.IP, ifIndex int) error {
-	fd, err := openNetlink(unix.NETLINK_ROUTE)
-	if err != nil {
-		return err
-	}
-	defer unix.Close(fd)
-
-	packet := buildRestoreDefaultRoute(1, gateway, ifIndex)
-	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return err
-	}
-
-	return recvAcks(fd, 1)
-}
-
 func ReplaceDefaultRoute(ifIndex int) error {
 	fd, err := openNetlink(unix.NETLINK_ROUTE)
 	if err != nil {
@@ -60,6 +45,21 @@ func ReplaceDefaultRoute(ifIndex int) error {
 	defer unix.Close(fd)
 
 	packet := buildReplaceDefaultRoute(1, ifIndex)
+	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return err
+	}
+
+	return recvAcks(fd, 1)
+}
+
+func RestoreDefaultRoute(gateway net.IP, ifIndex int) error {
+	fd, err := openNetlink(unix.NETLINK_ROUTE)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+
+	packet := buildRestoreDefaultRoute(1, gateway, ifIndex)
 	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return err
 	}

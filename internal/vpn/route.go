@@ -1,7 +1,6 @@
 package vpn
 
 import (
-	"elevpn/internal/netlink"
 	"errors"
 	"fmt"
 	"net"
@@ -21,10 +20,15 @@ type Route struct {
 	gatewayInterfaceIdx int
 	tunnelInterfaceIdx  int
 	bypassIPs           []net.IP
+
+	ops routeOperations
 }
 
 func NewRoute(spec RouteSpec) (*Route, error) {
-	r := &Route{spec: spec}
+	r := &Route{
+		spec: spec,
+		ops:  netlinkRouteOperations{},
+	}
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
@@ -37,18 +41,27 @@ func (r *Route) Name() string {
 }
 
 func (r *Route) Cleanup() error {
-	// ip route del <server_ip>/32 via <real_gateway> dev <real_nic>
-	if err := netlink.RestoreDefaultRoute(r.gateway, r.gatewayInterfaceIdx); err != nil {
+	if err := r.ops.restoreDefaultRoute(r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
 	}
 
 	for _, bypassIP := range r.bypassIPs {
-		// ip route replace default via <real_gateway> dev <real_nic>
-		if err := netlink.DelHostRoute(bypassIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
+		if err := r.ops.delHostRoute(bypassIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (r *Route) rollbackHostRoutes(appliedCount int) error {
+	errs := make([]error, 0)
+	for i := appliedCount - 1; i >= 0; i-- {
+		bypassIP := r.bypassIPs[i]
+		if err := r.ops.delHostRoute(bypassIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
+			errs = append(errs, fmt.Errorf("failed to delete host route during rollback: ip=%s: %w", bypassIP, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (r *Route) Apply() error {
@@ -56,21 +69,22 @@ func (r *Route) Apply() error {
 		return err
 	}
 
-	for _, bypassIP := range r.bypassIPs {
-		// ip route add <bypass_ip>/32 via <real_gateway> dev <real_nic>
-		if err := netlink.AddHostRoute(bypassIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
-			return err
+	for i, bypassIP := range r.bypassIPs {
+		if err := r.ops.addHostRoute(bypassIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
+			rollbackErr := r.rollbackHostRoutes(i)
+			return errors.Join(
+				fmt.Errorf("failed to add bypass route: ip=%s: %w", bypassIP, err),
+				rollbackErr,
+			)
 		}
 	}
 
-	// ip route replace default dev <tun_nic>
-	if err := netlink.ReplaceDefaultRoute(r.tunnelInterfaceIdx); err != nil {
-		for _, bypassIP := range r.bypassIPs {
-			if delErr := netlink.DelHostRoute(bypassIP, r.gateway, r.gatewayInterfaceIdx); delErr != nil {
-				return fmt.Errorf("failed to replace default route: %v (failed to rollback host route: %v)", err, delErr)
-			}
-		}
-		return fmt.Errorf("failed to replace default route: %v", err)
+	if err := r.ops.replaceDefaultRoute(r.tunnelInterfaceIdx); err != nil {
+		rollbackErr := r.rollbackHostRoutes(len(r.bypassIPs))
+		return errors.Join(
+			fmt.Errorf("failed to replace default route: %w", err),
+			rollbackErr,
+		)
 	}
 	return nil
 }

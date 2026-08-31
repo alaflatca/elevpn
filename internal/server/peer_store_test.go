@@ -510,10 +510,10 @@ func TestPeerStoreRegisterConcurrentDuplicatePeer(t *testing.T) {
 	wg := sync.WaitGroup{}
 	results := make(chan registerResult, count)
 
-	for i := 0; i < count; i++ {
+	for range count {
 		wg.Add(1)
 
-		go func() {
+		wg.Go(func() {
 			defer wg.Done()
 
 			peer, created, err := ps.register(addr, random)
@@ -522,7 +522,7 @@ func TestPeerStoreRegisterConcurrentDuplicatePeer(t *testing.T) {
 				created: created,
 				err:     err,
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
