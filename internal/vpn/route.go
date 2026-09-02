@@ -15,7 +15,8 @@ type RouteSpec struct {
 }
 
 type Route struct {
-	spec                RouteSpec
+	spec RouteSpec
+
 	gateway             net.IP
 	gatewayInterfaceIdx int
 	tunnelInterfaceIdx  int
@@ -44,21 +45,15 @@ func (r *Route) Cleanup() error {
 	if err := r.ops.restoreDefaultRoute(r.gateway, r.gatewayInterfaceIdx); err != nil {
 		return err
 	}
-
-	for _, bypassIP := range r.bypassIPs {
-		if err := r.ops.delHostRoute(bypassIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.deleteHostRoutes(len(r.bypassIPs))
 }
 
-func (r *Route) rollbackHostRoutes(appliedCount int) error {
+func (r *Route) deleteHostRoutes(count int) error {
 	errs := make([]error, 0)
-	for i := appliedCount - 1; i >= 0; i-- {
+	for i := count - 1; i >= 0; i-- {
 		bypassIP := r.bypassIPs[i]
 		if err := r.ops.delHostRoute(bypassIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
-			errs = append(errs, fmt.Errorf("failed to delete host route during rollback: ip=%s: %w", bypassIP, err))
+			errs = append(errs, fmt.Errorf("failed to delete host route: ip=%s: %w", bypassIP, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -71,7 +66,7 @@ func (r *Route) Apply() error {
 
 	for i, bypassIP := range r.bypassIPs {
 		if err := r.ops.addHostRoute(bypassIP, r.gateway, r.gatewayInterfaceIdx); err != nil {
-			rollbackErr := r.rollbackHostRoutes(i)
+			rollbackErr := r.deleteHostRoutes(i)
 			return errors.Join(
 				fmt.Errorf("failed to add bypass route: ip=%s: %w", bypassIP, err),
 				rollbackErr,
@@ -80,7 +75,7 @@ func (r *Route) Apply() error {
 	}
 
 	if err := r.ops.replaceDefaultRoute(r.tunnelInterfaceIdx); err != nil {
-		rollbackErr := r.rollbackHostRoutes(len(r.bypassIPs))
+		rollbackErr := r.deleteHostRoutes(len(r.bypassIPs))
 		return errors.Join(
 			fmt.Errorf("failed to replace default route: %w", err),
 			rollbackErr,

@@ -76,32 +76,34 @@
     protocol과 server package를 race detector로 검증했다.
 
 
+9. route rollback과 cleanup 보강
+
+    Route.Apply 중 bypass route 추가나 default route 변경이 실패하면,
+    이미 추가된 host route만 역순으로 rollback한다.
+    Route.Cleanup은 default route 복구에 성공한 뒤 bypass route를 역순으로 삭제한다.
+    host route 삭제가 일부 실패해도 나머지 삭제를 계속하고 오류를 모아서 반환한다.
+    fake route operations를 사용한 unit test와 race detector 20회 반복 검증을 통과했다.
+
+
 남은 작업
 ---------
 
-1. route rollback 보강
-
-    Route.Apply 중 bypass route를 여러 개 추가하다가 중간 실패하면,
-    이미 추가된 route만 내부에서 rollback하도록 보강한다.
-    route 적용과 rollback에 대한 unit test를 추가한다.
-
-
-2. client/server 처리 test
+1. client/server 처리 test
 
     handshake, sequence 검증, packet drop 처리를 단위 테스트한다.
 
 
-3. end-to-end test
+2. end-to-end test
 
     Linux network namespace를 사용해 TUN, route, UDP tunnel, cleanup을 자동 검증한다.
 
 
-4. handshake 보호 보강 (선택)
+3. handshake 보호 보강 (선택)
 
     활성 peer의 동일한 client random은 중복 등록되지 않는다.
     추가로 짧은 시간의 ALOHA 반복 요청을 제한하는 rate limit을 검토한다.
 
 
-5. key rotation/rekey (장기 개선)
+4. key rotation/rekey (장기 개선)
 
     장시간 유지되는 peer session의 key를 교체하는 정책을 검토한다.
